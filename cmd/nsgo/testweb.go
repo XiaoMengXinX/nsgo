@@ -194,6 +194,8 @@ func runWebTest(ctx context.Context, b *cdp, base string, args, env []string, ou
 		{"Runtime.enable", nil},
 		{"Page.enable", nil},
 		{"Runtime.addBinding", map[string]any{"name": "nsgoTest"}},
+		{"Page.bringToFront", nil},
+		{"Emulation.setFocusEmulationEnabled", map[string]any{"enabled": true}},
 		{"Emulation.setDeviceMetricsOverride", map[string]any{"width": 390, "height": 844, "deviceScaleFactor": webTestScale, "mobile": false}},
 	} {
 		if _, err := b.call(session, call.method, call.params); err != nil {

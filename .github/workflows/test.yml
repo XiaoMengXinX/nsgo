@@ -81,6 +81,8 @@ jobs:
         run: go tool nsgo test -target web -run '^TestRefFocusUsesNativeKeyboardStops$' ./internal/platform/web
       - name: Test browser radio and tab focus
         run: go tool nsgo test -target web -run '^(TestRadioGroupIsOneStopItsArrowsMoveThrough|TestTabsTakeHomeEndAndSwapLeftAndRightRightToLeft)$' ./base
+      - name: Test browser Tab focus navigation
+        run: go tool nsgo test -target web ./internal/testhost/testdata/webkeys
       - name: Test browser package trust persistence
         run: go tool nsgo test -target web ./tsx/pkg
 
