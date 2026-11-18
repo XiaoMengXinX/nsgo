@@ -234,6 +234,29 @@ func TestDragAtStartsWhereItSays(t *testing.T) {
 	}
 }
 
+func TestFocusStopsOnLongAndReleaseHandlers(t *testing.T) {
+	app := Start(t, func(cx *core.Scope) core.Node {
+		return core.View{Style: core.Style{Width: core.Pt(200), Height: core.Pt(100)}, Children: []core.Node{
+			core.View{TestID: "first", Style: core.Style{Width: core.Pt(100), Height: core.Pt(30)}, OnPress: func(core.PressEvent) {}},
+			core.View{TestID: "long", Style: core.Style{Width: core.Pt(100), Height: core.Pt(30)}, OnLongPress: func(core.PressEvent) {}},
+			core.View{TestID: "up", Style: core.Style{Width: core.Pt(100), Height: core.Pt(30)}, OnPressUp: func(core.PressEvent) {}},
+		}}
+	}, Environment(core.Environment{OS: core.OSMacOS, Idiom: core.IdiomDesktop}))
+	app.Focus("id:first")
+	app.Key("tab")
+	if !app.Find("id:long").Focused {
+		t.Fatal("Tab skipped the long-press focus stop")
+	}
+	app.Key("tab")
+	if !app.Find("id:up").Focused {
+		t.Fatal("Tab skipped the press-up focus stop")
+	}
+	app.Focus("id:long")
+	if !app.Find("id:long").Focused {
+		t.Fatal("Focus did not reach the long-press stop")
+	}
+}
+
 func TestLongPressSelectsText(t *testing.T) {
 	app := Start(t, func(cx *core.Scope) core.Node {
 		return core.View{Children: []core.Node{
