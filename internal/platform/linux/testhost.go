@@ -365,8 +365,10 @@ func (t *testSurface) Key(key string) error {
 		return fmt.Errorf("unknown key %q", key)
 	}
 	var handled bool
+	var focused *view
 	t.onLoop(func() {
 		v := t.focused()
+		focused = v
 		if v == nil || v.entry == 0 && v.textView == 0 {
 			return
 		}
@@ -385,8 +387,6 @@ func (t *testSurface) Key(key string) error {
 			}
 		case state == 0 && name == "backspace":
 			gSignalEmitByName(edit, cstr("backspace"))
-		case state == 0 && (name == "enter" || name == "return") && v.textView == 0:
-			gSignalEmitByName(v.entry, cstr("activate"))
 		default:
 			return
 		}
@@ -396,8 +396,11 @@ func (t *testSurface) Key(key string) error {
 		return nil
 	}
 	t.onLoop(func() {
-		keyPressedCallback(0, keyval, 0, state, t.w.handle)
+		consumed := keyPressedCallback(0, keyval, 0, state, t.w.handle) != 0
 		keyReleasedCallback(0, keyval, 0, state, t.w.handle)
+		if !consumed && focused != nil && state == 0 && (name == "enter" || name == "return") && focused.textView == 0 {
+			gSignalEmitByName(focused.entry, cstr("activate"))
+		}
 	})
 	return nil
 }
