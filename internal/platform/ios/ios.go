@@ -359,13 +359,16 @@ func loadUIKit() {
 		objc.MethodDef{Cmd: sel("safeAreaInsetsDidChange"), Fn: func(self objc.ID, cmd objc.SEL) {
 			apple.Super(self, cmd)
 			if v := views[self]; v != nil {
-				v.surface.refresh()
+				// UIKit may report new insets before the bounds change that
+				// belongs to them. Read the environment with that size in
+				// surfaceLayout instead of sending a separate environment batch.
+				self.Send(sel("setNeedsLayout"))
 			}
 		}},
 		objc.MethodDef{Cmd: sel("traitCollectionDidChange:"), Fn: func(self objc.ID, cmd objc.SEL, previous objc.ID) {
 			apple.Super(self, cmd, previous)
 			if v := views[self]; v != nil {
-				v.surface.refresh()
+				self.Send(sel("setNeedsLayout"))
 			}
 		}},
 	)
@@ -1796,7 +1799,14 @@ func surfaceLayout(self objc.ID, cmd objc.SEL) {
 		b := objc.Send[apple.CGRect](self, selBounds)
 		// The reserved regions are read at the size reported now, so they go with it.
 		size := driver.Size{Width: driver.Points(b.Size.Width), Height: driver.Points(b.Size.Height)}
-		v.surface.engine.Resize(size, v.surface.geometry(size))
+		geometry := v.surface.geometry(size)
+		env := v.surface.environment()
+		if !env.Equal(v.surface.env) {
+			v.surface.env = env
+			v.surface.engine.ResizeWithEnvironment(size, geometry, env)
+		} else {
+			v.surface.engine.Resize(size, geometry)
+		}
 		if h := v.surface.hud; h != nil {
 			h.layout()
 		}
