@@ -27,6 +27,16 @@ const (
 
 // foldGeometry is the geometry of a surface view of size with safe area safe, regions and the hinge's latest reading: an occlusion region becomes an occluding obstruction and a division region a separating one, one of each at the same frame a single obstruction both occluding and separating; and the hinge's status and angle are the geometry's and every obstruction's, with or without obstructions. An occlusion region that divides nothing is left to the safe area, as the system's bars and cutouts are, when it lies along an edge of the view, so the vertical bar the system may place on either edge never becomes an obstruction, or wholly within the safe area's insets, as a camera beside the vertical bar does.
 func foldGeometry(size driver.Size, safe driver.Edges, regions []reservedRegion, h hingeReading) driver.Geometry {
+	// UIKit can return the previous display's regions for a layout at a new
+	// size. A frame outside the current view cannot describe this surface, so
+	// wait for a later layout pass instead of committing a split at stale
+	// coordinates.
+	for _, r := range regions {
+		if !within(size, r.frame) {
+			regions = nil
+			break
+		}
+	}
 	inside := driver.Bounds{Origin: driver.Point{X: safe.Left, Y: safe.Top}, Size: driver.Size{Width: size.Width - safe.Left - safe.Right, Height: size.Height - safe.Top - safe.Bottom}}
 	var obstructions []driver.Obstruction
 	for _, r := range regions {
@@ -74,6 +84,10 @@ func foldGeometry(size driver.Size, safe driver.Edges, regions []reservedRegion,
 	g := driver.Divide(size, kept)
 	g.State, g.Angle, g.HasAngle = state, angle, h.known
 	return g
+}
+
+func within(size driver.Size, f driver.Bounds) bool {
+	return f.Origin.X >= 0 && f.Origin.Y >= 0 && f.Origin.X+f.Size.Width <= size.Width && f.Origin.Y+f.Size.Height <= size.Height
 }
 
 // overlaps reports whether a and b share an area.

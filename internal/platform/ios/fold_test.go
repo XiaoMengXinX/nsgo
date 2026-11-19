@@ -71,6 +71,9 @@ func TestFoldGeometry(t *testing.T) {
 			Regions: []driver.Region{{Frame: bounds(0, 0, 900, 640)}},
 			Angle:   1, HasAngle: true,
 		}},
+		{"a stale region measured at a taller display", driver.Size{Width: 678, Height: 466}, []reservedRegion{{frame: bounds(182.5, 0, 40, 669), division: true}}, hingeReading{}, driver.Geometry{
+			Regions: []driver.Region{{Frame: bounds(0, 0, 678, 466)}},
+		}},
 		{"the hinge left its hierarchy", size, hinge, hingeReading{}, driver.Geometry{
 			Regions:      []driver.Region{{Frame: bounds(0, 0, 440, 640)}, {Frame: bounds(460, 0, 440, 640)}},
 			Obstructions: []driver.Obstruction{{Frame: bounds(440, 0, 20, 640), Occluding: true, Separating: true}},

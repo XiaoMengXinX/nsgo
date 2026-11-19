@@ -147,6 +147,11 @@ type surface struct {
 	batch uint64 // batches applied
 	// hinge is the latest a UIHingeInteraction reported (watchHinge).
 	hinge hingeReading
+	// regionSize is the size of the last layout whose reserved regions were
+	// read. regionLayouts asks UIKit for a few more passes after a display or
+	// trait change, because its first answers can still use the old space.
+	regionSize    driver.Size
+	regionLayouts int
 	// perf measures the surface while its panel, hud, shows; perfOn says
 	// the app asked for them.
 	perf   *engine.PerfMonitor
@@ -359,12 +364,14 @@ func loadUIKit() {
 		objc.MethodDef{Cmd: sel("safeAreaInsetsDidChange"), Fn: func(self objc.ID, cmd objc.SEL) {
 			apple.Super(self, cmd)
 			if v := views[self]; v != nil {
+				v.surface.scheduleRegionLayouts()
 				v.surface.refresh()
 			}
 		}},
 		objc.MethodDef{Cmd: sel("traitCollectionDidChange:"), Fn: func(self objc.ID, cmd objc.SEL, previous objc.ID) {
 			apple.Super(self, cmd, previous)
 			if v := views[self]; v != nil {
+				v.surface.scheduleRegionLayouts()
 				v.surface.refresh()
 			}
 		}},
@@ -1796,11 +1803,26 @@ func surfaceLayout(self objc.ID, cmd objc.SEL) {
 		b := objc.Send[apple.CGRect](self, selBounds)
 		// The reserved regions are read at the size reported now, so they go with it.
 		size := driver.Size{Width: driver.Points(b.Size.Width), Height: driver.Points(b.Size.Height)}
+		if size != v.surface.regionSize {
+			v.surface.regionSize = size
+			v.surface.regionLayouts = 3
+		}
 		v.surface.engine.Resize(size, v.surface.geometry(size))
+		if v.surface.regionLayouts > 0 {
+			v.surface.regionLayouts--
+			v.surface.scheduleRegionLayouts()
+		}
 		if h := v.surface.hud; h != nil {
 			h.layout()
 		}
 	}
+}
+
+func (s *surface) scheduleRegionLayouts() {
+	if s.native == 0 {
+		return
+	}
+	s.native.Send(selPerformOnMain, sel("setNeedsLayout"), objc.ID(0), false)
 }
 
 func surfaceApply(self objc.ID, _ objc.SEL, _ objc.ID) {
