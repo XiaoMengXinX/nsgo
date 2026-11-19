@@ -1196,7 +1196,7 @@ func TestAnswerAtReachesTheAlertsSurface(t *testing.T) {
 		t.Fatalf("alerts %+v, want two numbered alike", alerts)
 	}
 	want := map[string]string{"Main?": "main", "Other?": "other"}[alerts[1].Title]
-	app.answerAt(1, 0)
+	app.answerAt(1, 0, true)
 	if len(answers) != 1 || answers[0] != want {
 		t.Fatalf("answering %q reached %v", alerts[1].Title, answers)
 	}

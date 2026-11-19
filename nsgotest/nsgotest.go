@@ -762,7 +762,7 @@ func (a *App) step(format string, args ...any) {
 		if err != nil {
 			a.t.Fatalf("nsgotest: %v", err)
 		}
-		a.Answer(index)
+		a.answerAt(0, index, false)
 	}
 }
 
@@ -787,7 +787,7 @@ func (a *App) done() {
 func (a *App) answerAlerts() {
 	a.t.Helper()
 	for a.OnAlert != nil && len(a.alerts) > 0 {
-		a.Answer(a.OnAlert(a.alerts[0]))
+		a.answerAt(0, a.OnAlert(a.alerts[0]), false)
 	}
 }
 
@@ -1120,11 +1120,11 @@ func (a *App) Answer(index int) {
 	if len(a.alerts) == 0 {
 		a.t.Fatal("nsgotest: no alert to answer")
 	}
-	a.answerAt(0, index)
+	a.answerAt(0, index, true)
 }
 
 // answerAt chooses the button at index of the alert at i in Alerts, headless on the surface that showed it, as each numbers its alerts itself.
-func (a *App) answerAt(i, index int) {
+func (a *App) answerAt(i, index int, finish bool) {
 	alert := a.alerts[i]
 	a.alerts = slices.Delete(slices.Clone(a.alerts), i, i+1)
 	if a.target != nil {
@@ -1134,4 +1134,7 @@ func (a *App) answerAt(i, index int) {
 	tree := a.alertTrees[i]
 	a.alertTrees = slices.Delete(slices.Clone(a.alertTrees), i, i+1)
 	a.dispatchOn(tree, driver.Event{Kind: driver.EventAlert, Count: alert.ID, Index: index})
+	if finish {
+		a.done()
+	}
 }

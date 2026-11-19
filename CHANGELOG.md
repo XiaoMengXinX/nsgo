@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Advance headless alert animations when `nsgotest.App.Answer` returns (#782 by @houko).
+
 ## [0.2.0] - 2026-11-19
 
 - Add HarmonyOS as a preview target, whose ArkTS host runs the engine in ArkWeb and draws it with ArkUI views, in `nsgo build`, `nsgo run` and `nsgo test -target harmonyos` (#79 by @togotop).

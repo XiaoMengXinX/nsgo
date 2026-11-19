@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nsgo-dev/nsgo/base"
 	"github.com/nsgo-dev/nsgo/core"
 	"github.com/nsgo-dev/nsgo/desktop"
 	"github.com/nsgo-dev/nsgo/internal/driver"
@@ -546,6 +547,21 @@ func TestAlertsGetDefaultAnswersAndFastForward(t *testing.T) {
 	app.FastForward(5 * time.Minute)
 	if fired != 2 {
 		t.Fatalf("fast forward fired %d timers", fired)
+	}
+}
+
+func TestAnswerTakesEndingFrames(t *testing.T) {
+	app := Start(t, func(cx *core.Scope) core.Node {
+		open := core.NewSignal(cx, true)
+		return base.Sheet{Open: open.Get, OnOpenChange: func(value bool, _ base.Reason) { open.Set(value) }, TestID: "sheet",
+			Children: []core.Node{core.View{TestID: "close", Style: core.Style{Width: core.Pt(100), Height: core.Pt(40)}, OnPress: func(core.PressEvent) {
+				cx.ShowAlert(core.AlertConfig{Title: "Sure?", Actions: []core.AlertAction{{Label: "Yes"}}}, func(int) { open.Set(false) })
+			}}}}
+	}, Environment(core.Environment{OS: core.OSIOS, Idiom: core.IdiomPhone}))
+	app.Press("id:close")
+	app.Answer(0)
+	if app.Exists("id:sheet") {
+		t.Fatal("the sheet is still present after answering its alert")
 	}
 }
 
