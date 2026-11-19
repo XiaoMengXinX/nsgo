@@ -333,6 +333,43 @@ func TestEnvironmentReportsMinimized(t *testing.T) {
 	}
 }
 
+func TestWindowEnvironmentIsIndependent(t *testing.T) {
+	if Target() != "" {
+		t.Skip("checks the headless model")
+	}
+	var mainLife, settingsLife func() core.Lifecycle
+	app := StartApp(t, func(cx *core.Scope) {
+		cx.SetApplicationMenu([]desktop.MenuItem{{Label: "Window", Items: []desktop.MenuItem{{Role: desktop.MenuMinimize}}}})
+		desktop.OpenWindow(cx, desktop.WindowOptions{Width: 200, Height: 100, Title: "Settings"}, func(cx *core.Scope) core.Node {
+			settingsLife = cx.Env().Lifecycle
+			return core.Text{Content: "settings"}
+		})
+		cx.SetMainView(func(cx *core.Scope) core.Node {
+			mainLife = cx.Env().Lifecycle
+			return core.Text{Content: "main", TestID: "main"}
+		})
+	}, Environment(core.Environment{OS: core.OSWindows, Idiom: core.IdiomDesktop}))
+	app.Find("id:main")
+	if mainLife() != core.LifecycleActive || settingsLife() != core.LifecycleActive {
+		t.Fatalf("initial lifecycle: main %v, settings %v", mainLife(), settingsLife())
+	}
+	app.SetWindowEnvironment("", func(env *core.Environment) {
+		env.Lifecycle = core.LifecycleBackground
+		env.Minimized = true
+	})
+	if mainLife() != core.LifecycleBackground || settingsLife() != core.LifecycleActive {
+		t.Fatalf("window environment: main %v, settings %v", mainLife(), settingsLife())
+	}
+	app.SetWindowEnvironment("", func(env *core.Environment) {
+		env.Lifecycle = core.LifecycleActive
+		env.Minimized = false
+	})
+	app.ChooseMenu("Window", "Minimize")
+	if mainLife() != core.LifecycleBackground || settingsLife() != core.LifecycleActive {
+		t.Fatalf("menu minimize: main %v, settings %v", mainLife(), settingsLife())
+	}
+}
+
 // TestHotKeyRegistrationAnswers: the headless platform registers an app's global shortcuts, answers a combination the app holds already as taken, and those HotKeyTaken and HotKeyUnsupported list as they say, so a test sees what the app shows for each.
 func TestHotKeyRegistrationAnswers(t *testing.T) {
 	if Target() != "" {

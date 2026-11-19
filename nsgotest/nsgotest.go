@@ -391,13 +391,14 @@ type App struct {
 	// loads, by URI, which answer Scope.ImageSize; others fail to load.
 	ImageSizes map[string]driver.Size
 	// tree is the surface steps act on and the model shows: the app's only one, or with a desktop environment its main window (main) once it opened. appTree is the app's own surface with a desktop environment, which opens the windows, nil without one; surfaces are the windows that have opened, and clear the windows and panels that are transparent, opened so or made so by SetWindowTransparent, which report it as a compositing desktop does (surfaceEnv).
-	tree     *core.Tree
-	appTree  *core.Tree
-	main     *core.Tree
-	surfaces map[uint32]bool
-	clear    map[uint32]bool
-	root     *core.Scope
-	store    *core.Store
+	tree       *core.Tree
+	appTree    *core.Tree
+	main       *core.Tree
+	surfaces   map[uint32]bool
+	windowEnvs map[uint32]driver.Environment
+	clear      map[uint32]bool
+	root       *core.Scope
+	store      *core.Store
 	// Clock is the app's clock, which Advance and FastForward move: a ManualClock starting at 2026-01-01 00:00 UTC, its wall time with it, unless the Clock or WallTime option sets it. Options apply before the first render, so what they set is what it reads. Under Measure the app runs on the system's clock instead.
 	Clock *core.ManualClock
 	// wallTime is what the WallTime option sets.
@@ -494,12 +495,13 @@ func StartApp(t testing.TB, app func(app *core.Scope), opts ...Option) *App {
 func start(t testing.TB, view func(cx *core.Scope) core.Node, fn func(app *core.Scope), opts []Option) *App {
 	t.Helper()
 	a := &App{
-		t:        t,
-		size:     driver.Size{Width: 390, Height: 844},
-		Clock:    core.NewManualClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)),
-		views:    map[driver.NodeID]*View{},
-		edits:    map[driver.NodeID]uint32{},
-		surfaces: map[uint32]bool{},
+		t:          t,
+		size:       driver.Size{Width: 390, Height: 844},
+		Clock:      core.NewManualClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)),
+		views:      map[driver.NodeID]*View{},
+		edits:      map[driver.NodeID]uint32{},
+		surfaces:   map[uint32]bool{},
+		windowEnvs: map[uint32]driver.Environment{},
 
 		Permissions:       map[core.Permission]core.PermissionStatus{},
 		PermissionAnswers: map[core.Permission]core.PermissionStatus{},
@@ -698,7 +700,9 @@ func (a *App) Settle() {
 					a.surfaces[surface.ID()] = true
 					surface.SetViewPacing(false)
 					if a.env != nil {
-						surface.SetEnvironment(a.surfaceEnv(surface, *a.env))
+						env := a.surfaceEnv(surface, *a.env)
+						a.windowEnvs[surface.ID()] = env
+						surface.SetEnvironment(env)
 					}
 					// The main window, which SetMainView opens, is the one steps act on, from its first batch: not a panel, a tray view or another window the app opened before it.
 					if a.main == nil && surface.Window() != nil && surface.Window() == a.root.MainWindow() {
@@ -927,7 +931,10 @@ func (a *App) setTransparent(t *core.Tree, b *driver.MountBatch) {
 		}
 		a.clear[t.ID()] = it.Window.On
 		if a.env != nil && a.surfaces[t.ID()] {
-			t.SetEnvironment(a.surfaceEnv(t, *a.env))
+			env := a.windowEnvs[t.ID()]
+			env.WindowTransparent = it.Window.On
+			a.windowEnvs[t.ID()] = env
+			t.SetEnvironment(env)
 		}
 	}
 }
@@ -945,12 +952,61 @@ func (a *App) SetEnvironment(env driver.Environment) {
 		a.appTree.SetEnvironment(env)
 		for _, surface := range a.appTree.Surfaces() {
 			if !surface.Closed() {
-				surface.SetEnvironment(a.surfaceEnv(surface, env))
+				env := a.surfaceEnv(surface, env)
+				a.windowEnvs[surface.ID()] = env
+				surface.SetEnvironment(env)
 			}
 		}
 	} else {
 		a.tree.SetEnvironment(env)
 	}
+	a.Settle()
+}
+
+// SetWindowEnvironment changes the environment of one desktop window and
+// settles. The empty title names the main window. A non-empty title names the
+// one window with that title, and fails when none or more than one match.
+func (a *App) SetWindowEnvironment(title string, change func(*core.Environment)) {
+	a.t.Helper()
+	if a.target != nil {
+		a.t.Fatalf("nsgotest: SetWindowEnvironment needs the headless model")
+	}
+	if a.appTree == nil {
+		a.t.Fatalf("nsgotest: SetWindowEnvironment needs a desktop app")
+	}
+	if change == nil {
+		a.t.Fatalf("nsgotest: SetWindowEnvironment needs a change")
+	}
+	var match *core.Tree
+	for _, surface := range a.appTree.Surfaces() {
+		if surface.Closed() || surface.Window() == nil {
+			continue
+		}
+		if title == "" {
+			if surface != a.main {
+				continue
+			}
+		} else {
+			i := slices.IndexFunc(a.Opened, func(config SurfaceConfig) bool { return config.ID == surface.ID() && config.Title == title })
+			if i < 0 {
+				continue
+			}
+		}
+		if match != nil {
+			a.t.Fatalf("nsgotest: more than one window has title %q", title)
+		}
+		match = surface
+	}
+	if match == nil {
+		a.t.Fatalf("nsgotest: no window has title %q", title)
+	}
+	env, ok := a.windowEnvs[match.ID()]
+	if !ok {
+		a.t.Fatalf("nsgotest: window %q has no environment", title)
+	}
+	change((*core.Environment)(&env))
+	a.windowEnvs[match.ID()] = env
+	match.SetEnvironment(env)
 	a.Settle()
 }
 

@@ -6,6 +6,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/nsgo-dev/nsgo/core"
 	"github.com/nsgo-dev/nsgo/internal/driver"
 )
 
@@ -946,7 +947,10 @@ func (a *App) menuRole(role driver.MenuRole) {
 			a.Quits++
 		}
 	case driver.MenuMinimize:
-		a.changeWindowState(role, func(env *driver.Environment) { env.Minimized = true })
+		a.changeWindowState(role, func(env *driver.Environment) {
+			env.Minimized = true
+			env.Lifecycle = driver.LifecycleBackground
+		})
 	case driver.MenuZoom:
 		a.changeWindowState(role, func(env *driver.Environment) { env.Maximized = !env.Maximized })
 	case driver.MenuToggleFullScreen:
@@ -963,9 +967,7 @@ func (a *App) changeWindowState(role driver.MenuRole, change func(*driver.Enviro
 	if a.env == nil || a.appTree == nil || a.tree == a.appTree {
 		a.t.Fatalf("nsgotest: the menu role %q needs a main window open: a macOS environment, or StartApp with a Windows or Linux one", role.Label())
 	}
-	env := *a.env
-	change(&env)
-	a.SetEnvironment(env)
+	a.SetWindowEnvironment("", func(env *core.Environment) { change((*driver.Environment)(env)) })
 }
 
 // menuEdit carries out editing role in the focused field, as its own keys do, and reports whether a field took it. A focused web view's page is not modelled, so a role it would take fails the step.
