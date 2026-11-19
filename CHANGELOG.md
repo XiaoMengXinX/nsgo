@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Route a macOS test host's main-window close through `OnClosing` (#771 by @houko).
+
 ## [0.2.0] - 2026-11-19
 
 - Add HarmonyOS as a preview target, whose ArkTS host runs the engine in ArkWeb and draws it with ArkUI views, in `nsgo build`, `nsgo run` and `nsgo test -target harmonyos` (#79 by @togotop).

@@ -584,6 +584,25 @@ func TestCloseWindowRunsTheMainWindowsHandlers(t *testing.T) {
 }
 
 // Application-menu items with a standard role and no OnSelect do headless what the desktop platforms do with them, by their shortcut and by ChooseMenu, and a role the model does not carry out fails the step rather than swallow its key (#711).
+func TestTargetMainWindowCloseRunsOnClosing(t *testing.T) {
+	if Target() != "macos" {
+		t.Skip("runs on the macOS test host")
+	}
+	var called bool
+	app := Start(t, func(cx *core.Scope) core.Node {
+		cx.CurrentWindow().OnClosing(cx, func(c *desktop.WindowClosing) {
+			called = true
+			c.Cancel()
+		})
+		return core.Text{Content: "main", TestID: "main"}
+	})
+	app.Key("mod+w")
+	if !called {
+		t.Fatal("the main window's OnClosing handler did not run")
+	}
+	app.Find("id:main")
+}
+
 func TestApplicationMenuRolesHeadless(t *testing.T) {
 	if Target() != "" {
 		t.Skip("checks the headless menu role path")

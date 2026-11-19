@@ -51,7 +51,7 @@ func registerPaste() {
 			// (core.Window.OnClosing), which destroys it.
 			Cmd: sel("windowShouldClose:"),
 			Fn: func(self objc.ID, _ objc.SEL, window objc.ID) bool {
-				if s := windowSurface(window); s != nil && s.id != 0 && !finished {
+				if s := windowSurface(window); s != nil && !finished {
 					s.engine.Dispatch(driver.Event{Kind: driver.EventWindowClose})
 					return false
 				}
