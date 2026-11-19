@@ -83,10 +83,15 @@ func messaging(cx *core.Scope) core.Node {
 	}
 	// Where the page's button and link are, which it posts as it loads.
 	var at struct{ Post, Save [2]core.Points }
+	ready := core.NewSignal(cx, false)
 	web := &core.Ref{}
 	got := func(data string) {
 		if rest, ok := strings.CutPrefix(data, "at:"); ok {
-			_ = json.Unmarshal([]byte(rest), &at)
+			var next struct{ Post, Save [2]core.Points }
+			if err := json.Unmarshal([]byte(rest), &next); err == nil && next.Post != [2]core.Points{} && next.Save != [2]core.Points{} {
+				at = next
+				ready.Set(true)
+			}
 			return
 		}
 		message.Set(data)
@@ -117,6 +122,9 @@ func messaging(cx *core.Scope) core.Node {
 		Caption{Label: tr.MediaSaved(), Note: func() string { return or(saved.Get()) }},
 		Caption{Label: tr.MediaScriptResult(), Note: func() string { return or(result.Get()) }},
 		ui.Wrap{Children: []core.Node{
+			core.Show{When: ready.Get, Then: func(*core.Scope) core.Node {
+				return core.View{TestID: "page-ready", Style: core.Style{Width: core.Pt(1), Height: core.Pt(1)}}
+			}},
 			ui.Button{Text: tr.MediaPostToThePage(), OnPress: func() {
 				sent.Set(int(time.Now().UnixMilli() % 1000))
 				web.PostMessage(fmt.Sprintf("hi #%d", sent.GetUntracked()))
