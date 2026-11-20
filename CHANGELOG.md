@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- Run Android's vertical and horizontal list momentum regression tests in CI (#728 by @houko).
+
 - Add Xcode SDK metadata and the arm64 device requirement to iOS, tvOS and watchOS device bundles and their extensions (#889 by @houko).
 - Make WebView mobile drag tests tolerate WebKit and WebView2 coalescing intermediate moves while still requiring a touch drag (#891 by @houko).
 - Name inline image data by a SHA-256 digest of its bytes rather than their address in `ImageSource.Key`, so a buffer freed and reused at the same address cannot draw an earlier image in Android's canvas bitmap cache, the Linux and Windows shader textures or the mini program's images, which did not keep the bytes alive as the Apple and web canvas caches did since 0.2.0 (#738 by @houko).
