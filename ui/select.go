@@ -58,7 +58,7 @@ func optionItemsFunc[T comparable](options func() []Option[T]) func() []base.Sel
 		options := options()
 		items := make([]base.SelectItem, len(options))
 		for i, o := range options {
-			items[i] = base.SelectItem{Value: strconv.Itoa(i), Title: o.Label, Disabled: o.Disabled != nil && o.Disabled()}
+			items[i] = base.SelectItem{Value: strconv.Itoa(i), Title: o.Label, Group: o.Group, Disabled: o.Disabled != nil && o.Disabled()}
 		}
 		return items
 	}
@@ -150,6 +150,7 @@ func (s Select[T]) Render(cx *core.Scope) core.Node {
 		StyleFunc: func() core.Style { return core.Style{FocusVisible: FocusRing(cx, 2)} },
 		Trigger:   face, PopupStyleFunc: popup, BackdropStyle: backdrop, ListStyle: core.Style{MaxHeight: core.Pt(320)},
 		ItemStyle: row, ItemStyleFunc: look, GroupStyle: group, GroupStyleFunc: groupLook, Ref: s.Ref, LabelledBy: s.LabelledBy, Invalid: s.Invalid, Label: label, TestID: s.TestID,
+		RenderGroup: func(e base.SelectGroup) core.Node { return core.Text{Content: e.Title} },
 		RenderItem: func(e base.SelectEntry) core.Node {
 			id := ""
 			if s.TestID != "" {

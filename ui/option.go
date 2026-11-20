@@ -9,8 +9,11 @@ import "github.com/nsgo-dev/nsgo/core"
 // in its menu's row and in the field while chosen, and Trailing at the
 // end of its row, where a button's presses stay its own.
 type Option[T comparable] struct {
-	Value    T
-	Label    string
+	Value T
+	Label string
+	// Group places this option under a non-selectable heading shared by
+	// adjacent options with the same non-empty group.
+	Group    string
 	Icon     func() *core.SVG
 	Disabled func() bool
 	Content  core.Node

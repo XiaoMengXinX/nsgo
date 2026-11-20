@@ -37,6 +37,30 @@ func TestSelect(t *testing.T) {
 	})
 }
 
+func TestSelectOptionGroups(t *testing.T) {
+	each := func(t *testing.T, e core.Environment) {
+		var selected *core.Signal[string]
+		app, _ := start(t, e, func(cx *core.Scope) core.Node {
+			selected = core.NewSignal(cx, "")
+			return Select[string]{TestID: "service", Label: "Service", Value: selected.Get, OnChange: selected.Set,
+				Options: []Option[string]{{Value: "one", Label: "One", Group: "Built in"}, {Value: "two", Label: "Two", Group: "Built in"}, {Value: "three", Label: "Three", Group: "Plugins"}}}
+		})
+		app.Press("service")
+		if !app.Exists("role:header Built in") || !app.Exists("role:header Plugins") {
+			t.Fatal("group headings are missing")
+		}
+		if app.Find("role:header Plugins").Props.Focusable {
+			t.Fatal("group heading is focusable")
+		}
+		app.Press("role:option Three")
+		if selected.Get() != "three" {
+			t.Fatalf("selected %q, want three", selected.Get())
+		}
+	}
+	each(t, desktopEnv)
+	each(t, phoneEnv)
+}
+
 // TestSelectOptionSlots shows an option's Leading in its row and in the
 // field while chosen, and its Trailing only in its row, where a button
 // leaves the choice and the menu alone.
