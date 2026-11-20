@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Answer `nsgotest.App.TakePhoto` under `nsgo test -target` too, on every target, in place of the camera, instead of calling it and dropping its answer (#951 by @houko).
 - Add `Position` and `PagePosition` to `core.PanEvent` on every pan phase across native, web, mini program and headless targets (#706 by @houko).
 - Cancel a web press after the pointer moves beyond eight points, matching headless and native drag behavior (#705 by @houko).
 - Add `nsgo build -release-notes`, a Markdown file of the release's notes that each appcast carries, which Sparkle's and WinSparkle's update dialogs show and the updater's prompt on Linux and Android shows as text, through `core.UpdateCheck.Notes` (#32 by @houko).
