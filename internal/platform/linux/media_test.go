@@ -411,7 +411,7 @@ func TestLayoutAnimationMovesShowsAndRetiresViews(t *testing.T) {
 		t.Skip("opens a window")
 	}
 	title := "nsgo-native-" + t.Name()
-	second := driver.LayoutTransition{Duration: 1500 * time.Millisecond}
+	second := driver.LayoutTransition{Duration: 2 * time.Second}
 	app := func(cx *core.Scope) core.Node {
 		x := core.NewSignal(cx, driver.Points(0))
 		kept, added := core.NewSignal(cx, true), core.NewSignal(cx, false)
@@ -449,8 +449,11 @@ func TestLayoutAnimationMovesShowsAndRetiresViews(t *testing.T) {
 	})
 
 	w.pressView(t, "move")
-	waitPixels(t, w, "the box half way", func(p pixels) bool {
-		x := firstX(p, 10, 0xff0000)
+	waitLayoutAnimation(t, w, "the box half way", func(v *view, l *layoutAnim) bool {
+		if v.props.TestID != "box" || l.move == nil {
+			return false
+		}
+		x := l.shown.Origin.X
 		return x > 15 && x < 65
 	})
 	waitPixels(t, w, "the box at its new frame", func(p pixels) bool { return firstX(p, 10, 0xff0000) == 80 })
@@ -467,13 +470,19 @@ func TestLayoutAnimationMovesShowsAndRetiresViews(t *testing.T) {
 			}
 		})
 	}
+	waitLayoutAnimation(t, w, "the removed view fading", func(v *view, l *layoutAnim) bool {
+		return v.dying && l.fade != nil && l.out && l.shownPart > 0.15 && l.shownPart < 0.85
+	})
 	waitPixels(t, w, "the removed view fading", func(p pixels) bool {
 		c := p.at(10, 50)
-		return c[0] == 0xff && c[2] > 0x30 && c[2] < 0xd0
+		return c[0] == 0xff && c[2] > 0x20 && c[2] < 0xe0
 	})
 	waitPixels(t, w, "the removed view gone", func(p pixels) bool { return isColor(p.at(10, 50), 0xffffff) })
 
 	w.pressView(t, "add")
+	waitLayoutAnimation(t, w, "the new view growing from its center", func(v *view, l *layoutAnim) bool {
+		return !v.dying && l.fade != nil && l.fade.Property == driver.LayoutScale && l.shownPart > 0.15 && l.shownPart < 0.85
+	})
 	waitPixels(t, w, "the new view growing from its center", func(p pixels) bool {
 		return isColor(p.at(100, 60), 0x00ff00) && isColor(p.at(83, 43), 0xffffff)
 	})
@@ -485,6 +494,31 @@ func TestLayoutAnimationMovesShowsAndRetiresViews(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 		w.onLoop(t, func() { ticking = len(w.layouts) > 0 || w.ticking })
+	}
+}
+
+// waitLayoutAnimation waits for an animation's state instead of relying on a
+// screenshot landing in a narrow range while a busy runner is drawing frames.
+func waitLayoutAnimation(t *testing.T, w *window, what string, ok func(*view, *layoutAnim) bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		matched := false
+		w.onLoop(t, func() {
+			for _, v := range w.layouts {
+				if v.layout != nil && ok(v, v.layout) {
+					matched = true
+					return
+				}
+			}
+		})
+		if matched {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("want %s", what)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
