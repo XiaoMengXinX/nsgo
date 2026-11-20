@@ -2,6 +2,7 @@
 
 ## [Unreleased]
 
+- Pin the test environment's `Camera` under `nsgo test -target`, so `Env.CanTakePhoto` reports a camera on macOS, the desktops and simulators when a test asks for one (#952 by @houko).
 - Answer `nsgotest.App.TakePhoto` under `nsgo test -target` too, on every target, in place of the camera, instead of calling it and dropping its answer (#951 by @houko).
 - Add `Position` and `PagePosition` to `core.PanEvent` on every pan phase across native, web, mini program and headless targets (#706 by @houko).
 - Cancel a web press after the pointer moves beyond eight points, matching headless and native drag behavior (#705 by @houko).
