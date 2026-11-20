@@ -41,6 +41,8 @@ func (o *Options) UseTest(t testhost.Options, pin *TestPin) {
 	o.LogPerf = t.FPS
 	// The machine's clipboard is never the test's, and its clock is.
 	o.Clipboard = &driver.MemoryClipboard{}
+	// Nobody is at a test's camera.
+	o.TakePhoto = t.TakePhoto
 	if t.Clock != nil {
 		o.Clock = t.Clock
 	}

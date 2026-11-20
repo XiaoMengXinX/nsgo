@@ -1,6 +1,7 @@
 package pick_test
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -66,4 +67,59 @@ func TestPickImagesWithoutAnAnswerCancels(t *testing.T) {
 	app := nsgotest.Start(t, pickApp)
 	app.Press("id:pick")
 	app.WaitFor("text:picked 0", 5*time.Second)
+}
+
+// photoApp is a button that asks to take a photo and shows what came back.
+func photoApp(cx *core.Scope) core.Node {
+	got := core.NewSignal(cx, "none")
+	return core.View{Children: []core.Node{
+		core.View{Role: core.RoleButton, Label: "Photo", TestID: "photo", Style: core.Style{Width: core.Pt(80), Height: core.Pt(30)},
+			OnPress: func(core.PressEvent) {
+				cx.TakePhoto(core.PhotoOptions{}, func(photo *core.PickedFile, err error) {
+					switch {
+					case err != nil:
+						got.Set("failed " + err.Error())
+					case photo == nil:
+						got.Set("cancelled")
+					default:
+						got.Set("took " + photo.Name)
+					}
+				})
+			}},
+		core.Text{ContentFunc: got.Get},
+	}}
+}
+
+// startPhotoApp starts photoApp where the environment says the device has a camera.
+func startPhotoApp(t *testing.T) *nsgotest.App {
+	t.Helper()
+	if nsgotest.Target() != "" {
+		t.Skip("the target's environment does not take the test's Camera yet (#948)")
+	}
+	return nsgotest.Start(t, photoApp, nsgotest.Environment(core.Environment{Camera: true}))
+}
+
+// TestTakePhotoAnswersTheApp checks that App.TakePhoto, set after Start as a test sets it, answers the app's photo in place of the camera (#897).
+func TestTakePhotoAnswersTheApp(t *testing.T) {
+	app := startPhotoApp(t)
+	called := 0
+	app.TakePhoto = func(core.PickRequest) (*core.PickedFile, error) {
+		called++
+		return &core.PickedFile{Name: "IMG_0001.jpg", MIME: "image/jpeg", Data: []byte("jpeg")}, nil
+	}
+	app.Press("id:photo")
+	app.WaitFor("text:took IMG_0001.jpg", 5*time.Second)
+	if called != 1 || len(app.Photos) != 1 {
+		t.Fatalf("TakePhoto was asked %d times, %d photos recorded, want once each", called, len(app.Photos))
+	}
+	app.TakePhoto = func(core.PickRequest) (*core.PickedFile, error) { return nil, errors.New("camera refused") }
+	app.Press("id:photo")
+	app.WaitFor("text:failed camera refused", 5*time.Second)
+}
+
+// TestTakePhotoWithoutAnAnswerCancels checks that without App.TakePhoto the user cancels rather than the camera opening over the test.
+func TestTakePhotoWithoutAnAnswerCancels(t *testing.T) {
+	app := startPhotoApp(t)
+	app.Press("id:photo")
+	app.WaitFor("text:cancelled", 5*time.Second)
 }

@@ -57,6 +57,8 @@ type Options struct {
 	FPS bool
 	// PickImages, when set, answers the photo picks the app asks for in place of the system's picker: done takes the files picked, none when the user cancels, and may be called on any goroutine. macOS, Windows and Linux use it; the other targets show their picker.
 	PickImages func(driver.PickRequest, func([]driver.PickedFile))
+	// TakePhoto, when set, answers the photos the app asks to take in place of the platform's camera, on every target: done takes the photo, nil when the user cancels, or why it failed, and may be called on any goroutine.
+	TakePhoto func(driver.PickRequest, func(*driver.PickedFile, error))
 }
 
 // Surface is an app shown on a platform. Its methods act as the user

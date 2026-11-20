@@ -666,6 +666,10 @@ func (a *App) apply(b *driver.MountBatch) {
 			}
 		case driver.ItemTakePhoto:
 			a.Photos = append(a.Photos, *it.Pick)
+			if a.target != nil {
+				// The target's engine asks targetOptions' TakePhoto.
+				break
+			}
 			ev := driver.Event{Kind: driver.EventPick, Count: it.Count}
 			if a.TakePhoto != nil {
 				photo, err := a.TakePhoto(*it.Pick)

@@ -291,6 +291,17 @@ func (a *App) targetOptions(t *target) testhost.Options {
 			done(files)
 		})
 	}
+	// TakePhoto too: the engine answers each photo with it in place of the target's camera, nobody being there to take one.
+	takePhoto := func(r driver.PickRequest, done func(*driver.PickedFile, error)) {
+		a.postTest(func() {
+			var photo *driver.PickedFile
+			var err error
+			if a.TakePhoto != nil {
+				photo, err = a.TakePhoto(r)
+			}
+			done(photo, err)
+		})
+	}
 	return testhost.Options{
 		CheckCommits: !automationBuild && !a.measure,
 		Size:         size, Environment: a.env, Storage: a.store, Secrets: a.Secrets, Host: a.host, Clock: clock,
@@ -298,6 +309,7 @@ func (a *App) targetOptions(t *target) testhost.Options {
 		Observe:    t.observe,
 		Event:      t.surfaceEvent,
 		PickImages: pickImages,
+		TakePhoto:  takePhoto,
 	}
 }
 

@@ -255,9 +255,7 @@ type App struct {
 	// Picks are the photo picks the app asked for, oldest first. PickImages answers each with the files the user picks; with none the user cancels. It answers headless and under `nsgo test -target` macos, windows and linux, in place of the system's picker; on the other targets the system's picker shows and PickImages is not asked.
 	Picks      []driver.PickRequest
 	PickImages func(r driver.PickRequest) []driver.PickedFile
-	// Photos are the photos the app asked to take, oldest first, where
-	// the environment says Camera. TakePhoto answers each with the photo
-	// the user takes, or with why it failed; with none the user cancels.
+	// Photos are the photos the app asked to take, oldest first, where the environment says Camera. TakePhoto answers each with the photo the user takes, or with why it failed; with none the user cancels. It answers headless and under `nsgo test -target` on every target, in place of the camera, which never opens in a test.
 	Photos    []driver.PickRequest
 	TakePhoto func(r driver.PickRequest) (*driver.PickedFile, error)
 	// PickScreenColor answers Scope.PickScreenColor with the color the user

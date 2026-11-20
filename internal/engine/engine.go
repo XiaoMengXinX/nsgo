@@ -48,8 +48,12 @@ type observed struct {
 	surface   uint32
 	observe   func(uint32, *driver.MountBatch)
 	clipboard *driver.MemoryClipboard
+	takePhoto TakePhoto
 	dispatch  func(driver.Event)
 }
+
+// TakePhoto answers a photo the app asks to take in place of the platform's camera: done takes the photo, nil when the user cancels, or why it failed, and may be called on any goroutine.
+type TakePhoto = func(r driver.PickRequest, done func(*driver.PickedFile, error))
 
 // platform is what the engine runs on in o's place: o itself, or, over a platform that registers fonts, o with its RegisterFont, which embedding the Platform interface does not promote (#313).
 func (o observed) platform() Platform {
@@ -70,9 +74,17 @@ func (o observedFonts) RegisterFont(data []byte) error {
 
 func (o observed) Mount(b *driver.MountBatch) {
 	o.observe(o.surface, b)
-	if o.clipboard != nil {
+	if o.clipboard != nil || o.takePhoto != nil {
 		var kept []driver.MountItem
 		for i := range b.Items {
+			if it := b.Items[i]; it.Kind == driver.ItemTakePhoto && o.takePhoto != nil {
+				o.answerPhoto(it)
+				continue
+			}
+			if o.clipboard == nil {
+				kept = append(kept, b.Items[i])
+				continue
+			}
 			ev, answer, taken := o.clipboard.Take(&b.Items[i])
 			switch {
 			case answer:
@@ -90,6 +102,20 @@ func (o observed) Mount(b *driver.MountBatch) {
 		}
 	}
 	o.Platform.Mount(b)
+}
+
+// answerPhoto answers it, a photo to take, from o's takePhoto instead of the platform's camera.
+func (o observed) answerPhoto(it driver.MountItem) {
+	o.takePhoto(*it.Pick, func(photo *driver.PickedFile, err error) {
+		ev := driver.Event{Kind: driver.EventPick, Count: it.Count}
+		switch {
+		case err != nil:
+			ev.Text = err.Error()
+		case photo != nil:
+			ev.Data = []driver.PickedFile{*photo}
+		}
+		o.dispatch(ev)
+	})
 }
 
 // App builds the root's content once.
@@ -143,6 +169,8 @@ type Options struct {
 	// Clipboard, with Observe, is the clipboard of a test's own, which
 	// the app's clipboard commands use instead of the platform's.
 	Clipboard *driver.MemoryClipboard
+	// TakePhoto, with Observe, answers the photos the app asks to take in place of the platform's camera.
+	TakePhoto TakePhoto
 	// LogPerf logs Perf's readings once a second while the engine runs.
 	LogPerf bool
 }
@@ -320,7 +348,7 @@ func Start(p Platform, app App, opts Options) *Engine {
 	e.raw = opts.Environment
 	opts.Environment = e.effective(opts.Environment)
 	if observe := opts.Observe; observe != nil {
-		p = observed{p, 0, observe, opts.Clipboard, e.Dispatch}.platform()
+		p = observed{p, 0, observe, opts.Clipboard, opts.TakePhoto, e.Dispatch}.platform()
 	}
 	go e.run(p, app, opts, tokens)
 	if opts.LogPerf && opts.Perf != nil {
@@ -599,7 +627,7 @@ func (e *Engine) run(p Platform, app App, opts Options, tokens Tokens) {
 				opened := m.attach
 				if opts.Observe != nil {
 					// A test host follows the windows the app opens too, and their clipboard commands use the test's clipboard.
-					opened = observed{opened, m.surface, opts.Observe, opts.Clipboard, (&Engine{runner: e.runner, surface: m.surface}).Dispatch}.platform()
+					opened = observed{opened, m.surface, opts.Observe, opts.Clipboard, opts.TakePhoto, (&Engine{runner: e.runner, surface: m.surface}).Dispatch}.platform()
 				}
 				attach(tree.Surfaces()[surfaceIndex], opened)
 				taken[i].attach = nil
