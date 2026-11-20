@@ -132,6 +132,10 @@ type runtime struct {
 	posting int
 	// chunk loads a split bundle's chunks (SplitApp).
 	chunk func(key string) (string, error)
+	// boundDepth tracks bound-function chains made by a sandbox. goja invokes
+	// native bound functions recursively in Go without adding JS call frames.
+	boundDepth   map[*js.Object]int
+	nativeActive map[*js.Object]int
 	// committing is set while a commit is asked for after the page's
 	// engine called Go (engine_browser.go).
 	committing bool
@@ -159,7 +163,7 @@ func (c *continuations) Exited() {
 
 func newRuntime(cx *core.Scope) *runtime {
 	started.Store(true)
-	r := &runtime{vm: js.New(), cx: cx, modules: map[string]*js.Object{}, warned: map[string]bool{}, origin: cx.Now()}
+	r := &runtime{vm: js.New(), cx: cx, modules: map[string]*js.Object{}, warned: map[string]bool{}, boundDepth: map[*js.Object]int{}, nativeActive: map[*js.Object]int{}, origin: cx.Now()}
 	r.root = &node{r: r, kind: kindRegion, elem: core.NewElement(cx, nil)}
 	r.vm.SetFieldNameMapper(js.UncapFieldNameMapper())
 	// A runaway recursion throws a RangeError rather than overflowing the

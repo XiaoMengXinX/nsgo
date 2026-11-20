@@ -3,6 +3,7 @@ package tsx
 import (
 	"errors"
 	"fmt"
+	"reflect"
 
 	"github.com/nsgo-dev/nsgo/tsx/internal/js"
 	"github.com/nsgo-dev/nsgo/tsx/pkg"
@@ -194,13 +195,13 @@ func (p *Plugin) call(fn js.Value, args []any, dl *deadline, finish func(any, er
 	if dl != nil && dl.expired {
 		return
 	}
-	if _, ok := v.Export().(*js.Promise); !ok {
-		finish(exportJSON(v), nil)
+	if v.ExportType() != reflect.TypeFor[*js.Promise]() {
+		finish(r.exportJSON(v), nil)
 		return
 	}
 	then, _ := js.AssertFunction(v.(*js.Object).Get("then"))
 	onResolve := r.function(func(call js.FunctionCall) js.Value {
-		finish(exportJSON(arg(call, 0)), nil)
+		finish(r.exportJSON(arg(call, 0)), nil)
 		return js.Undefined()
 	})
 	onReject := r.function(func(call js.FunctionCall) js.Value {
@@ -232,7 +233,7 @@ func (p *Plugin) Close() { p.cx.Dispose() }
 func (r *runtime) rejection(v js.Value) error {
 	o, ok := v.(*js.Object)
 	if !ok {
-		return fmt.Errorf("%v", exportJSON(v))
+		return fmt.Errorf("%v", r.exportJSON(v))
 	}
 	msg := o.Get("message")
 	if !defined(msg) {

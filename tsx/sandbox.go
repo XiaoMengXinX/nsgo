@@ -264,6 +264,9 @@ func (s Sandbox) start(cx *core.Scope, name, src string) *runtime {
 	if limits.Memory > 0 {
 		r.limitMemory(int64(limits.Memory))
 	}
+	if r.boundDepth == nil {
+		r.boundDepth = map[*js.Object]int{}
+	}
 	r.limitNesting()
 	if limits.Harden {
 		r.harden()

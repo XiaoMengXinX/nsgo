@@ -10,12 +10,35 @@ import (
 	"github.com/nsgo-dev/nsgo/tsx/internal/js"
 )
 
-// maxNesting is how many levels the built-ins that go down what a bundle gives them in Go, a Go call or more for each level, may go in a sandbox before they throw a RangeError, as a browser's do past their stack.
-const maxNesting = 1000
+const maxNativeReentry = 64
 
 // limitNesting replaces those built-ins, JSON.stringify, Array.prototype.join, toString, toLocaleString and flat, and JSON.parse with a reviver, with ones that throw a RangeError once maxNesting levels deep. goja counts only JS calls against the call stack's limit (Limits.Stack), so data a million levels deep, which a bundle builds in a moment, had them search the levels above for cycles at every level for hours, past the reach of the call's time budget, which interrupts only JS, or overflow the goroutine's stack, which ends the process whatever the sandbox's limits (#875); an array whose join is Array.prototype.toString did so at once. The levels a wrapper goes down count in r.sandbox.nesting while it runs, so that one a getter, toJSON, an element's toString or a reviver calls from within another has only what is left. Each wrapper is the only one around its built-in: under Limits.Memory, join, toLocaleString and stringify check what they make as well (memory_goja.go). The web keeps the browser's built-ins, which have their own stack.
 func (r *runtime) limitNesting() {
+	if r.boundDepth == nil {
+		r.boundDepth = map[*js.Object]int{}
+	}
+	if r.nativeActive == nil {
+		r.nativeActive = map[*js.Object]int{}
+	}
 	g := r.vm.GlobalObject()
+	getOwnPropertyDescriptor, _ := js.AssertFunction(object(g, "Object").Get("getOwnPropertyDescriptor"))
+	// ownMethod returns a data property or accessor getter without invoking the
+	// property. Native built-ins can call a user-replaced method directly from
+	// Go, so inspecting the alias must not itself recurse through that getter.
+	ownMethod := func(o *js.Object, name string) js.Value {
+		if o == nil || getOwnPropertyDescriptor == nil {
+			return nil
+		}
+		d := r.callOrig(getOwnPropertyDescriptor, js.Undefined(), []js.Value{o, r.vm.ToValue(name)})
+		do, ok := d.(*js.Object)
+		if !ok {
+			return nil
+		}
+		if v := do.Get("value"); !js.IsUndefined(v) {
+			return v
+		}
+		return do.Get("get")
+	}
 	array := object(g, "Array", "prototype")
 	join, _ := js.AssertFunction(array.Get("join"))
 	isArray, _ := js.AssertFunction(object(g, "Array", "isArray"))
@@ -55,6 +78,94 @@ func (r *runtime) limitNesting() {
 	r.wrap(array, "flat", func(call js.FunctionCall, orig js.Callable) js.Value {
 		return r.flat(call, orig, isArray)
 	})
+	// These native methods can call a user-replaced native method without
+	// passing through goja's JavaScript call stack. Count each entry so a
+	// native-to-native chain cannot exhaust the host Go stack (#928).
+	for _, method := range []struct{ object, name string }{
+		{"Object", "toString"}, {"Date", "toJSON"},
+	} {
+		o := object(g, method.object, "prototype")
+		r.wrap(o, method.name, func(call js.FunctionCall, orig js.Callable) js.Value {
+			this, _ := call.This.(*js.Object)
+			if method.name != "toString" && this != nil && r.nativeActive[this] >= maxNativeReentry {
+				panic(r.tooDeep())
+			}
+			if method.name != "toString" && this != nil {
+				r.nativeActive[this]++
+				defer r.releaseNative(this)
+			}
+			r.nest()
+			defer r.unnest()
+			return r.callOrig(orig, call.This, call.Arguments)
+		})
+	}
+	regexp := object(g, "RegExp", "prototype")
+	var regexpTestWrapper, regexpExecWrapper *js.Object
+	regexpTestWrapper = r.wrap(regexp, "test", func(call js.FunctionCall, orig js.Callable) js.Value {
+		this, _ := call.This.(*js.Object)
+		if alias := ownMethod(this, "exec"); alias != nil && alias.SameAs(regexpTestWrapper) {
+			panic(r.tooDeep())
+		}
+		if this != nil && r.nativeActive[this] >= maxNativeReentry {
+			panic(r.tooDeep())
+		}
+		if this != nil {
+			r.nativeActive[this]++
+			defer r.releaseNative(this)
+		}
+		r.nest()
+		defer r.unnest()
+		return r.callOrig(orig, call.This, call.Arguments)
+	})
+	regexpExecWrapper = r.wrap(regexp, "exec", func(call js.FunctionCall, orig js.Callable) js.Value {
+		this, _ := call.This.(*js.Object)
+		if alias := ownMethod(this, "test"); alias != nil && alias.SameAs(regexpExecWrapper) {
+			panic(r.tooDeep())
+		}
+		if this != nil && r.nativeActive[this] >= maxNativeReentry {
+			panic(r.tooDeep())
+		}
+		if this != nil {
+			r.nativeActive[this]++
+			defer r.releaseNative(this)
+		}
+		r.nest()
+		defer r.unnest()
+		return r.callOrig(orig, call.This, call.Arguments)
+	})
+	obj := object(g, "Object", "prototype")
+	var localeWrapper *js.Object
+	localeWrapper = r.wrap(obj, "toLocaleString", func(call js.FunctionCall, orig js.Callable) js.Value {
+		this, _ := call.This.(*js.Object)
+		if alias := ownMethod(this, "toString"); alias != nil && alias.SameAs(localeWrapper) {
+			panic(r.tooDeep())
+		}
+		if this != nil && r.nativeActive[this] >= maxNativeReentry {
+			panic(r.tooDeep())
+		}
+		if this != nil {
+			r.nativeActive[this]++
+			defer r.releaseNative(this)
+		}
+		r.nest()
+		defer r.unnest()
+		return r.callOrig(orig, call.This, call.Arguments)
+	})
+	function := object(g, "Function", "prototype")
+	r.wrap(function, "bind", func(call js.FunctionCall, orig js.Callable) js.Value {
+		depth := 1
+		if this, ok := call.This.(*js.Object); ok {
+			depth += r.boundDepth[this]
+		}
+		if depth > maxNesting {
+			panic(r.tooDeep())
+		}
+		v := r.callOrig(orig, call.This, call.Arguments)
+		if bound, ok := v.(*js.Object); ok {
+			r.boundDepth[bound] = depth
+		}
+		return v
+	})
 
 	json := object(g, "JSON")
 	isRawJSON, _ := js.AssertFunction(json.Get("isRawJSON"))
@@ -85,6 +196,14 @@ func (r *runtime) limitNesting() {
 	})
 }
 
+func (r *runtime) releaseNative(o *js.Object) {
+	if depth := r.nativeActive[o] - 1; depth > 0 {
+		r.nativeActive[o] = depth
+	} else {
+		delete(r.nativeActive, o)
+	}
+}
+
 // nest counts a level a built-in goes down, throwing a RangeError past maxNesting.
 func (r *runtime) nest() {
 	if r.sandbox.nesting >= maxNesting {
@@ -95,11 +214,6 @@ func (r *runtime) nest() {
 
 // unnest uncounts the level nest counted.
 func (r *runtime) unnest() { r.sandbox.nesting-- }
-
-// tooDeep is the RangeError a built-in throws past maxNesting, a browser's for a stack too deep.
-func (r *runtime) tooDeep() *js.Object {
-	return r.goError(&JSError{Name: "RangeError", Message: "Maximum call stack size exceeded"})
-}
 
 // flat is Array.prototype.flat, which goes down as many levels as its depth asks. It reads the depth once and hands it to the original as a number. Asked to go deeper than the levels left, it has the original go down those and throws if what it made still holds an array, which goes deeper.
 func (r *runtime) flat(call js.FunctionCall, orig, isArray js.Callable) js.Value {

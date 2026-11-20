@@ -102,3 +102,5 @@ Test an app as a user uses it with `nsgotest`, finding views by text, role, labe
 ## Reusable components
 
 A library of components follows NSGo's own split between behavior in an unstyled form and a look over it. Read [references/authoring.md](references/authoring.md) before writing components for other apps.
+
+- Native sandboxed recursive JSON/array conversions, native `Object`/`RegExp`/`Date` method chains and bound-function chains throw a catchable `RangeError` before overflowing the host's Go stack; JSON crossings into Go are depth-checked too.

@@ -287,17 +287,18 @@ func (r *runtime) run(p *js.Program) js.Value {
 }
 
 // wrap replaces o's method name with fn, which calls the original, keeping its name and length.
-func (r *runtime) wrap(o *js.Object, name string, fn func(call js.FunctionCall, orig js.Callable) js.Value) {
+func (r *runtime) wrap(o *js.Object, name string, fn func(call js.FunctionCall, orig js.Callable) js.Value) *js.Object {
 	v, _ := o.Get(name).(*js.Object)
 	orig, ok := js.AssertFunction(v)
 	if !ok {
-		return
+		return nil
 	}
 	f := r.function(func(call js.FunctionCall) js.Value { return fn(call, orig) })
 	for _, key := range []string{"name", "length"} {
 		_ = f.DefineDataProperty(key, v.Get(key), js.FLAG_FALSE, js.FLAG_TRUE, js.FLAG_FALSE)
 	}
 	_ = o.DefineDataProperty(name, f, js.FLAG_TRUE, js.FLAG_TRUE, js.FLAG_FALSE)
+	return f
 }
 
 // callOrig calls a wrapped built-in, throwing what it throws.

@@ -29,6 +29,13 @@ var nestingCases = map[string]string{
 	"join is toString":   `const a = [1]; Object.defineProperty(a, "join", { value: Array.prototype.toString }); String(a)`,
 	"typed toString":     `const a = [1]; Object.defineProperty(a, "join", { value: Object.getPrototypeOf(Uint8Array.prototype).toString }); String(a)`,
 	"join in toJSON":     `const d = deepArray(); let n = 0; const o = { toJSON() { return n++ < 900 ? [o] : String(d); } }; JSON.stringify(o)`,
+	// Hardened sandboxes make inherited built-ins non-writable, so define the
+	// aliases explicitly to exercise the native-to-native paths.
+	"object native chain": `const o = {}; Object.defineProperty(o, "toString", { value: Object.prototype.toLocaleString }); o.toLocaleString()`,
+	"regexp native chain": `const r = /x/; Object.defineProperty(r, "exec", { value: RegExp.prototype.test }); r.test("x")`,
+	"date native chain":   `const o = {}; o.toISOString = Date.prototype.toJSON; o.toISOString()`,
+	"native getter":       `const o = {}; Object.defineProperty(o, "toString", {get: Object.prototype.toLocaleString}); String(o)`,
+	"bound chain":         `let f = () => 1; for (let i = 0; i < 2000; i++) f = f.bind(null); f()`,
 }
 
 const nestingPrelude = `function deepArray() { let a = []; for (let i = 0; i < 1e6; i++) a = [a]; return a; }
@@ -69,4 +76,18 @@ func TestNestingThrowsARangeError(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestExportJSONDepthThrowsBeforeGoConversion(t *testing.T) {
+	r := limited(0)
+	v, err := r.vm.RunString(`let v = {}; for (let i = 0; i < 2000; i++) v = { v }; v`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if recover() == nil {
+			t.Fatal("exporting deeply nested data did not throw")
+		}
+	}()
+	r.exportJSON(v)
 }

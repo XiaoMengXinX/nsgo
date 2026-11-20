@@ -6,6 +6,10 @@ import (
 	"github.com/nsgo-dev/nsgo/core"
 )
 
+// maxNesting is the depth allowed for values crossing from a sandbox into Go.
+// Native goja built-ins use the same limit for their recursive work.
+const maxNesting = 1000
+
 // The host channel (NSH's host_channel.rs): host reaches the app that
 // embeds this one through core's channel ([embedding]): calls answered
 // by its handlers, posts, events and the parameters it started the app
@@ -22,7 +26,7 @@ func (r *runtime) host() js.Value {
 	}), nil, js.FLAG_FALSE, js.FLAG_TRUE)
 	set("call", func(call js.FunctionCall) js.Value {
 		p, resolve, reject := r.newPromise()
-		name, data := arg(call, 0).String(), exportJSON(arg(call, 1))
+		name, data := arg(call, 0).String(), r.exportJSON(arg(call, 1))
 		if !r.cx.HasHost() {
 			_ = reject(r.goError(core.Unavailable("nsgo/host: this platform has no host")))
 			return r.vm.ToValue(p)
@@ -52,7 +56,7 @@ func (r *runtime) host() js.Value {
 		return r.vm.ToValue(p)
 	})
 	set("post", func(call js.FunctionCall) js.Value {
-		r.cx.PostHost(arg(call, 0).String(), exportJSON(arg(call, 1)))
+		r.cx.PostHost(arg(call, 0).String(), r.exportJSON(arg(call, 1)))
 		return js.Undefined()
 	})
 	set("on", func(call js.FunctionCall) js.Value {
@@ -72,9 +76,48 @@ func (r *runtime) host() js.Value {
 }
 
 // exportJSON is a JS value as the host channel's JSON takes it.
-func exportJSON(v js.Value) any {
+func (r *runtime) exportJSON(v js.Value) any {
 	if !defined(v) {
 		return nil
 	}
+	r.checkExportDepth(v)
 	return v.Export()
+}
+
+func (r *runtime) tooDeep() *js.Object {
+	return r.goError(&JSError{Name: "RangeError", Message: "Maximum call stack size exceeded"})
+}
+
+// checkExportDepth walks values iteratively before goja recursively converts
+// them to Go. Host and plugin JSON crossings must not let a million nested
+// objects exhaust the host stack (#928).
+func (r *runtime) checkExportDepth(v js.Value) {
+	type item struct {
+		v     *js.Object
+		depth int
+	}
+	first, ok := v.(*js.Object)
+	if !ok {
+		return
+	}
+	stack := []item{{v: first}}
+	seen := map[*js.Object]struct{}{}
+	for len(stack) > 0 {
+		n := len(stack) - 1
+		it := stack[n]
+		stack = stack[:n]
+		if _, exists := seen[it.v]; exists {
+			continue
+		}
+		seen[it.v] = struct{}{}
+		if it.depth >= maxNesting {
+			panic(r.tooDeep())
+		}
+		for _, key := range it.v.Keys() {
+			child, ok := it.v.Get(key).(*js.Object)
+			if ok {
+				stack = append(stack, item{v: child, depth: it.depth + 1})
+			}
+		}
+	}
 }

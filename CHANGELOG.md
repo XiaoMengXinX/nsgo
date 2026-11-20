@@ -4,6 +4,7 @@
 
 - Give macOS's default menu bar AppKit's app menu, with About, Hide, Hide Others and Show All, and Check for Updates… in apps that update themselves, and a Window menu listing the windows, where it held only Quit and Edit; it takes no ⌘H, ⌥⌘H or ⌘M from the app's own key bindings (#947 by @houko).
 - Add `Position` and `PagePosition` to `core.PanEvent` on every pan phase across native, web, mini program and headless targets (#706 by @houko).
+- Guard native-to-native `Object`, `RegExp` and `Date` method chains, bound-function chains and JSON crossings in sandboxed TSX so they throw a catchable `RangeError` before overflowing the host Go stack (#928 by @houko).
 - Cancel a web press after the pointer moves beyond eight points, matching headless and native drag behavior (#705 by @houko).
 - Add `nsgo build -release-notes`, a Markdown file of the release's notes that each appcast carries, which Sparkle's and WinSparkle's update dialogs show and the updater's prompt on Linux and Android shows as text, through `core.UpdateCheck.Notes` (#32 by @houko).
 - Restore the most recent surviving application menu and its `YieldsToMenu` shortcuts when the menu owner's macOS window closes (#714 by @houko).

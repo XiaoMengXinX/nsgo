@@ -489,7 +489,7 @@ func (r *runtime) callback(fn js.Value, t reflect.Type) reflect.Value {
 					v, err := f(js.Undefined(), r.encodeAll(in)...)
 					if err != nil {
 						v = js.Undefined()
-					} else if _, ok := v.Export().(*js.Promise); ok {
+					} else if v.ExportType() == reflect.TypeFor[*js.Promise]() {
 						then, _ := js.AssertFunction(v.ToObject(r.vm).Get("then"))
 						_, _ = then(v, r.function(func(c js.FunctionCall) js.Value {
 							settle(c.Argument(0), nil)
