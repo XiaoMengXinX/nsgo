@@ -17,3 +17,13 @@ func TestPinSetsTheTestsDisplaySettings(t *testing.T) {
 		t.Errorf("pinned on: %+v", got)
 	}
 }
+
+// A test's camera stands over a platform without one, and a test that sets none keeps the platform's, as its photos then come from the platform's camera rules (#948).
+func TestPinGivesTheTestsCamera(t *testing.T) {
+	if got := Pin(driver.Environment{OS: driver.OSMacOS}, &driver.Environment{Camera: true}); !got.Camera {
+		t.Errorf("a test's camera was not pinned: %+v", got)
+	}
+	if got := Pin(driver.Environment{OS: driver.OSIOS, Camera: true}, &driver.Environment{}); !got.Camera {
+		t.Errorf("a phone's own camera was taken away: %+v", got)
+	}
+}

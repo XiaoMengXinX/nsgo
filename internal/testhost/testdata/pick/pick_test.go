@@ -90,12 +90,9 @@ func photoApp(cx *core.Scope) core.Node {
 	}}
 }
 
-// startPhotoApp starts photoApp where the environment says the device has a camera.
+// startPhotoApp starts photoApp where the environment says the device has a camera, which a target takes from the test too (#948).
 func startPhotoApp(t *testing.T) *nsgotest.App {
 	t.Helper()
-	if nsgotest.Target() != "" {
-		t.Skip("the target's environment does not take the test's Camera yet (#948)")
-	}
 	return nsgotest.Start(t, photoApp, nsgotest.Environment(core.Environment{Camera: true}))
 }
 
