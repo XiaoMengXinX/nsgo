@@ -30,7 +30,7 @@ final class Protocol {
         int kind = in.read();
         if (kind == -1) return null;
 
-        if (kind < BATCH || kind > TEXT_REQUEST) throw invalidMessage("unexpected message kind " + kind);
+        if (kind < BATCH || kind > AUDIO_FILE) throw invalidMessage("unexpected message kind " + kind);
 
         int length;
         try {
@@ -89,6 +89,9 @@ final class Protocol {
     /** A correlated text request: request ID and operation. */
     static final int TEXT_REQUEST = 26;
 
+    /** A staged audio file, or a failure: surface, object, path, error code and message. */
+    static final int AUDIO_FILE = 28;
+
 
     // Java to Go.
     static final int START = 1;
@@ -136,6 +139,9 @@ final class Protocol {
     static final int TEXT_REPLY = 27;
     /** Frame timestamp, display period, app UI work in nanoseconds, and whether the app changed. */
     static final int PERF_FRAME = 28;
+
+    /** A sound or player report (Audio.java, audio.go). */
+    static final int AUDIO_REPORT = 30;
 
     // TEXT_REQUEST carries a request ID and one of these operations.
     static final int TEXT_PREPARE = 1;
@@ -282,6 +288,7 @@ final class Protocol {
     static final int ITEM_OVERLAY_PERMISSION = 89;
     static final int ITEM_KEEP_AWAKE = 93;
     static final int ITEM_RELEASE_AWAKE = 94;
+    static final int ITEM_AUDIO = 96;
     static final int ITEM_SPEAK = 102;
     static final int ITEM_SENSOR = 103;
     static final int ITEM_ORIENTATION = 111;
