@@ -87,6 +87,7 @@ type view struct {
 	drawing    *driver.Drawing    // a canvas's
 	played     []driver.DrawOp    // the ops it last drew, its bound arguments' values in place
 	shader     *apple.ShaderLayer // a shader view's (shader.go)
+	gpu        *apple.GPULayer    // a 3D GPU view's (gpu.go)
 	container  objc.ID            // what holds its children under an effect or for its clip, once it has one
 	clipHeld   bool               // whether container clips the children in place of the view's own layer, which keeps its shadow and outline (clipsInHolder)
 	web        *apple.Web         // a web view's
@@ -252,6 +253,7 @@ type surface struct {
 	// shader (effect.go); root is the root view's, which screen shaders
 	// draw over.
 	effects apple.Effects[*view]
+	gpu     gpuState // mounted 3D GPU views (gpu.go)
 	root    driver.NodeID
 
 	selecting *selection
@@ -824,6 +826,7 @@ func (s *surface) environment() driver.Environment {
 		Audio:            idiom != driver.IdiomTV && apple.AudioAvailable(), // none on tvOS in the first stages (docs/architecture/audio.md)
 		Gamepads:         true,
 		AudioSchedule:    idiom != driver.IdiomTV && apple.AudioAvailable(),
+		GPU:              idiom != driver.IdiomTV && apple.GPUAvailable(), // tvOS deferred to Stage 2 (docs/architecture/gpu.md)
 		Camera:           cameraAvailable(),
 		ScanCode:         cameraAvailable() && idiom != driver.IdiomTV,
 		CanSendInput:     false,
@@ -1098,8 +1101,6 @@ func (s *surface) RequestFrame() {
 		apple.OnMain(s.frameClock)
 	}
 }
-
-func (s *surface) SubmitGPU(driver.GPUFrame) {}
 
 // frameClock starts the clock that serves a frame the engine asked s for: s's own, or, for a standalone app's scene that shows in no foreground window, that of one that does, since the engine asks one of its surfaces for the frames of all their trees.
 func (s *surface) frameClock() {
@@ -1504,6 +1505,10 @@ func (s *surface) apply(b *driver.MountBatch) {
 				fx.Invalidate()
 				s.shadeLater(v)
 			}
+		case driver.ItemGPU:
+			if v.kind == driver.KindGPU && it.GPU != nil {
+				s.configureGPU(v, *it.GPU)
+			}
 		case driver.ItemScrollTo:
 			start, end := scrollLimits(v.native)
 			to := apple.CGPoint{
@@ -1622,6 +1627,7 @@ func (s *surface) apply(b *driver.MountBatch) {
 // loads at the views' sizes and modals' entrances.
 func (s *surface) finish() {
 	s.startImages()
+	s.finishGPU()
 	s.updateModals()
 	for _, v := range s.presenting {
 		if s.views[v.id] == v && v.native.Send(selSuperview) != 0 && !s.navigating(s.views[s.root]) {
@@ -1682,6 +1688,8 @@ func (s *surface) create(kind driver.ViewKind, id driver.NodeID) *view {
 		v.native.Send(sel("setClipsToBounds:"), true)
 	case driver.KindShader:
 		v.newShader()
+	case driver.KindGPU:
+		v.newGPU()
 	}
 	if kind == driver.KindText {
 		v.updateAccessibility() // a text is an element without props
@@ -1767,6 +1775,9 @@ func (s *surface) delete(v *view, kept bool) {
 	}
 	if v.shader != nil {
 		v.shader.Release()
+	}
+	if v.gpu != nil {
+		s.deleteGPU(v)
 	}
 	delete(views, v.native)
 	if v.input != nil {

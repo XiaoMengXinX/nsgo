@@ -121,9 +121,9 @@ const (
 )
 
 var (
-	metalTried bool
-	mtlDevice  objc.ID
-	mtlQueue   objc.ID
+	metalOnce sync.Once
+	mtlDevice objc.ID
+	mtlQueue  objc.ID
 	// pipelines are the programs compiled so far, by the program, which
 	// apps keep for their lives.
 	pipelines = map[*driver.ShaderProgram]*metalPipeline{}
@@ -133,25 +133,23 @@ var (
 	selObjectAtIndexedSubscript = sel("objectAtIndexedSubscript:")
 )
 
-// loadMetal loads Metal and makes the device and queue every shader view
-// shares, once; it reports whether the machine has a Metal device.
+// loadMetal loads Metal and makes the device and queue every shader and GPU
+// view shares, once; it reports whether the machine has a Metal device.
 func loadMetal() bool {
-	if metalTried {
-		return mtlDevice != 0
-	}
-	metalTried = true
-	lib, err := purego.Dlopen("/System/Library/Frameworks/Metal.framework/Metal", purego.RTLD_NOW|purego.RTLD_GLOBAL)
-	if err != nil {
-		return false
-	}
-	var create func() objc.ID
-	purego.RegisterLibFunc(&create, lib, "MTLCreateSystemDefaultDevice")
-	mtlDevice = create()
-	if mtlDevice == 0 {
-		return false
-	}
-	mtlQueue = mtlDevice.Send(sel("newCommandQueue"))
-	return true
+	metalOnce.Do(func() {
+		lib, err := purego.Dlopen("/System/Library/Frameworks/Metal.framework/Metal", purego.RTLD_NOW|purego.RTLD_GLOBAL)
+		if err != nil {
+			return
+		}
+		var create func() objc.ID
+		purego.RegisterLibFunc(&create, lib, "MTLCreateSystemDefaultDevice")
+		mtlDevice = create()
+		if mtlDevice == 0 {
+			return
+		}
+		mtlQueue = mtlDevice.Send(sel("newCommandQueue"))
+	})
+	return mtlDevice != 0 && mtlQueue != 0
 }
 
 // NewShaderLayer returns a shader view's layer at scale pixels a point,

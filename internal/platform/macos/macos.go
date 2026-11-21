@@ -147,6 +147,7 @@ type view struct {
 	played    []driver.DrawOp       // the ops it last drew, its bound arguments' values in place
 	canvas    canvasPaint           // how it paints (content.go)
 	shader    *apple.ShaderLayer    // a shader view's (shader.go)
+	gpu       *apple.GPULayer       // a 3D GPU view's (gpu.go)
 	web       *apple.Web            // a web view's
 	video     *apple.Video          // a video's
 
@@ -303,6 +304,7 @@ type surface struct {
 	// effects are the views with an effect, a transition or a navigation
 	// shader (effect.go).
 	effects apple.Effects[*view]
+	gpu     gpuState // mounted 3D GPU views (gpu.go)
 
 	// The frame clock and what it animates.
 	animator *driver.Animator
@@ -1195,6 +1197,7 @@ func (s *surface) environment() driver.Environment {
 		Audio:            apple.AudioAvailable(),
 		Gamepads:         true,
 		AudioSchedule:    apple.AudioAvailable(),
+		GPU:              apple.GPUAvailable(),
 		CanSendInput:     true,
 		CanLockPointer:   true,
 		HasWebView:       true,
@@ -2042,8 +2045,6 @@ func (s *surface) RequestFrame() {
 	}
 }
 
-func (s *surface) SubmitGPU(driver.GPUFrame) {}
-
 func (s *surface) apply(b *driver.MountBatch) {
 	defer func() { s.openFrame = driver.WindowFrame{} }()
 	s.batch++
@@ -2405,6 +2406,10 @@ func (s *surface) apply(b *driver.MountBatch) {
 				fx.Invalidate()
 				s.shadeLater(v)
 			}
+		case driver.ItemGPU:
+			if v.kind == driver.KindGPU && it.GPU != nil {
+				s.configureGPU(v, *it.GPU)
+			}
 		case driver.ItemScrollTo:
 			if v.sc != nil {
 				v.scrollTo(it.Point, it.Animated)
@@ -2517,6 +2522,7 @@ func (s *surface) apply(b *driver.MountBatch) {
 // loads at the views' sizes and modals' entrances.
 func (s *surface) finish() {
 	s.startImages()
+	s.finishGPU()
 	for _, v := range s.presenting {
 		if s.views[v.id] == v && v.native.Send(selSuperview) != 0 && !s.navigating(v.up) {
 			h := objc.Send[apple.CGRect](v.native.Send(selSuperview), selBounds).Size.Height
@@ -2572,6 +2578,8 @@ func (s *surface) create(kind driver.ViewKind, id driver.NodeID) *view {
 		v.video.Dispatch = v.report
 	case driver.KindShader:
 		v.newShader()
+	case driver.KindGPU:
+		v.newGPU()
 	case driver.KindText:
 		v.updateAccessibility() // a text is an element without props
 	}
@@ -2605,6 +2613,9 @@ func (s *surface) delete(v *view, kept bool) {
 	v.releaseAXBar()
 	if v.shader != nil {
 		v.shader.Release()
+	}
+	if v.gpu != nil {
+		s.deleteGPU(v)
 	}
 	s.endEffect(v)
 	if v.content != v.native {
