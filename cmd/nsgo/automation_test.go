@@ -355,7 +355,7 @@ func TestDevAutomationRefusesWhatItCannotDrive(t *testing.T) {
 		t.Errorf("-automation -release: %v", err)
 	}
 	p.Dev.Target = "web"
-	if err := dev(context.Background(), p, devOptions{automation: true}); err == nil || !strings.Contains(err.Error(), "Apple devices and simulators so far") {
+	if err := dev(context.Background(), p, devOptions{automation: true}); err == nil || !strings.Contains(err.Error(), "macOS, Linux and Apple devices and simulators so far") {
 		t.Errorf("-automation -target web: %v", err)
 	}
 	for _, target := range []string{"native", "ios", "tvos", "watchos", "ios_simulator", "tvos_simulator", "watchos_simulator"} {
@@ -366,6 +366,12 @@ func TestDevAutomationRefusesWhatItCannotDrive(t *testing.T) {
 			t.Errorf("darwin %s -release: %v", target, err)
 		}
 		for _, goos := range []string{"linux", "windows"} {
+			if goos == "linux" && target == "native" {
+				if err := automationTargetError(target, goos, false); err != nil {
+					t.Errorf("%s %s: %v", goos, target, err)
+				}
+				continue
+			}
 			if err := automationTargetError(target, goos, false); err == nil {
 				t.Errorf("%s %s unexpectedly allowed", goos, target)
 			}
@@ -650,5 +656,42 @@ exit 0
 				}
 			}
 		})
+	}
+}
+
+func TestAutomationTargetSupport(t *testing.T) {
+	for _, tc := range []struct {
+		goos, target string
+		want         bool
+	}{
+		{"darwin", "native", true},
+		{"linux", "native", true},
+		{"windows", "native", false},
+		{"darwin", "web", false},
+		{"linux", "web", false},
+		{"linux", "android", false},
+		{"darwin", "ios_simulator", true},
+	} {
+		if got := automationSupported(tc.goos, tc.target); got != tc.want {
+			t.Errorf("automationSupported(%q, %q) = %v, want %v", tc.goos, tc.target, got, tc.want)
+		}
+	}
+	for _, tc := range []struct {
+		target string
+		want   bool
+	}{
+		{"macos_arm64", true},
+		{"macos_x64", true},
+		{"macos_universal", true},
+		{"linux_arm64", true},
+		{"linux_x64", true},
+		{"windows_arm64", false},
+		{"web", false},
+		{"android_arm64", false},
+		{"ios_simulator", true},
+	} {
+		if got := targetSupportsAutomation(tc.target); got != tc.want {
+			t.Errorf("targetSupportsAutomation(%q) = %v, want %v", tc.target, got, tc.want)
+		}
 	}
 }

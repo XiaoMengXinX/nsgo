@@ -34,12 +34,12 @@ func (l *lockedBuffer) String() string {
 	return l.b.String()
 }
 
-// TestAutomationEndToEnd builds testdata/automation as nsgo dev -automation does, runs it against a hub and drives it with posted events, the real menu bar, Dock menu and alerts. It opens a window and makes it key, so it runs only when asked, on a Mac with a GUI session:
+// TestAutomationEndToEnd builds testdata/automation as nsgo dev -automation does, runs it against a hub and drives it with native input, the real menu bar, alerts and (on macOS) the Dock menu. It opens a window (and on macOS makes it key), so it runs only when asked, on macOS with a GUI session or on Linux under a display or xvfb-run:
 //
 //	NSGO_AUTOMATION_E2E=1 go tool nsgo test -run TestAutomationEndToEnd ./cmd/nsgo
 func TestAutomationEndToEnd(t *testing.T) {
-	if runtime.GOOS != "darwin" || os.Getenv("NSGO_AUTOMATION_E2E") == "" {
-		t.Skip("set NSGO_AUTOMATION_E2E=1 on a Mac with a GUI session: the test opens a window and makes it key")
+	if (runtime.GOOS != "darwin" && runtime.GOOS != "linux") || os.Getenv("NSGO_AUTOMATION_E2E") == "" {
+		t.Skip("set NSGO_AUTOMATION_E2E=1 on macOS (GUI session) or Linux (display or xvfb-run): the test opens a window")
 	}
 	ctx := context.Background()
 	p, err := load(filepath.Join("..", "..", "testdata", "automation"))
@@ -47,13 +47,24 @@ func TestAutomationEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	p.prepareDev(devOptions{automation: true})
-	bundle, err := buildMacApp(ctx, p, t.TempDir(), runtime.GOARCH)
-	if err != nil {
-		t.Fatal(err)
+	outDir := t.TempDir()
+	var bin string
+	switch runtime.GOOS {
+	case "darwin":
+		bundle, err := buildMacApp(ctx, p, outDir, runtime.GOARCH)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bin = filepath.Join(bundle, "Contents", "MacOS", p.Name)
+	case "linux":
+		if err := buildLinux(ctx, p, outDir, runtime.GOARCH); err != nil {
+			t.Fatal(err)
+		}
+		bin = filepath.Join(outDir, p.Name)
 	}
 	h := startHub(t)
 	var out lockedBuffer
-	cmd := exec.Command(filepath.Join(bundle, "Contents", "MacOS", p.Name))
+	cmd := exec.Command(bin)
 	cmd.Env = append(os.Environ(), "NSGO_DEV_SERVER="+h.srv.url(), "NSGO_DEV_TOKEN="+h.srv.token)
 	cmd.Stdout, cmd.Stderr = &out, &out
 	if err := cmd.Start(); err != nil {
@@ -112,11 +123,18 @@ func TestAutomationEndToEnd(t *testing.T) {
 	// The menu and its alert are the app function's, which the app's own surface holds.
 	must(automation.Menu, automation.MenuParams{Path: []string{"Actions", "Reset"}}, nil)
 	shows(`text:"Count: 0"`)
-	// So is the Dock menu, which AppKit asks the app delegate for.
-	must(automation.Menu, automation.MenuParams{Dock: true, Path: []string{"Add Ten"}}, nil)
-	shows(`text:"Count: 10"`)
-	must(automation.Menu, automation.MenuParams{Path: []string{"Actions", "Reset"}}, nil)
-	shows(`text:"Count: 0"`)
+	if runtime.GOOS == "darwin" {
+		// So is the Dock menu, which AppKit asks the app delegate for.
+		must(automation.Menu, automation.MenuParams{Dock: true, Path: []string{"Add Ten"}}, nil)
+		shows(`text:"Count: 10"`)
+		must(automation.Menu, automation.MenuParams{Path: []string{"Actions", "Reset"}}, nil)
+		shows(`text:"Count: 0"`)
+	} else {
+		// Linux has no app icon menu yet.
+		if err := do(automation.Menu, automation.MenuParams{Dock: true, Path: []string{"Add Ten"}}, nil); err == nil || err.Code != automation.Unsupported {
+			t.Fatalf("dock menu on %s: %v, want unsupported", runtime.GOOS, err)
+		}
+	}
 	must(automation.Menu, automation.MenuParams{Path: []string{"Actions", "Ask"}}, nil)
 	var alerts automation.AlertResult
 	must(automation.Alert, automation.AlertParams{}, &alerts)

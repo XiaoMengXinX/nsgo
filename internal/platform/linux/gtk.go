@@ -251,6 +251,8 @@ var (
 	gSimpleActionGroupNew      func() uintptr
 	gtkWidgetInsertActionGroup func(uintptr, *byte, uintptr)
 	gActionMapRemoveAction     func(uintptr, *byte)
+	gCancellableNew            func() uintptr
+	gCancellableCancel         func(uintptr)
 
 	// Pango.
 	pangoCairoFontMapNew           func() uintptr
@@ -630,6 +632,8 @@ func bind() {
 	purego.RegisterLibFunc(&gSimpleActionGroupNew, gioLib, "g_simple_action_group_new")
 	purego.RegisterLibFunc(&gtkWidgetInsertActionGroup, gtkLib, "gtk_widget_insert_action_group")
 	purego.RegisterLibFunc(&gActionMapRemoveAction, gioLib, "g_action_map_remove_action")
+	purego.RegisterLibFunc(&gCancellableNew, gioLib, "g_cancellable_new")
+	purego.RegisterLibFunc(&gCancellableCancel, gioLib, "g_cancellable_cancel")
 
 	// Pango.
 	purego.RegisterLibFunc(&pangoCairoFontMapNew, pangocairoLib, "pango_cairo_font_map_new")

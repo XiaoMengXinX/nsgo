@@ -35,6 +35,7 @@ func (w *window) nextAlert() {
 	a := w.alerts[0]
 	w.alerts = w.alerts[1:]
 	w.alerting, w.alertingID, w.alertShown = true, a.ID, a
+	w.alertCancel = gCancellableNew()
 	// The constructor formats its message: a NULL format crashes GTK.
 	dialog := gtkAlertDialogNew(cstr(""))
 	if a.Title != "" {
@@ -63,7 +64,12 @@ func (w *window) nextAlert() {
 			gtkAlertDialogSetCancelButton(dialog, int32(cancel))
 		}
 	}
-	gtkAlertDialogChoose(dialog, w.toplevel(), 0, cbAlertChosen, w.handle)
+	parent := w.toplevel()
+	if parent != 0 && gtkWidgetGetVisible(parent) == 0 {
+		// An app-level alert on a hidden own surface has no visible parent window.
+		parent = 0
+	}
+	gtkAlertDialogChoose(dialog, parent, w.alertCancel, cbAlertChosen, w.handle)
 }
 
 func alertChosenCallback(dialog uintptr, result uintptr, data uintptr) {
@@ -71,6 +77,10 @@ func alertChosenCallback(dialog uintptr, result uintptr, data uintptr) {
 	if w == nil {
 		gObjectUnref(dialog)
 		return
+	}
+	if w.alertCancel != 0 {
+		gObjectUnref(w.alertCancel)
+		w.alertCancel = 0
 	}
 	index := int(gtkAlertDialogChooseFinish(dialog, result, 0))
 	gObjectUnref(dialog)

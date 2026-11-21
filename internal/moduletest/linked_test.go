@@ -108,8 +108,30 @@ func TestDevBuildsLink(t *testing.T) {
 	for _, target := range linkTargets {
 		t.Run(target[0]+"_"+target[1], func(t *testing.T) {
 			t.Parallel()
-			if !linkedPackages(t, target[0], target[1], "nsgodev")["net/http"] {
+			linked := linkedPackages(t, target[0], target[1], "nsgodev")
+			if !linked["net/http"] {
 				t.Error("a dev build does not link the dev client")
+			}
+			if linked["github.com/nsgo-dev/nsgo/nsgotest"] {
+				t.Error("a dev build without nsgoautomation links nsgotest")
+			}
+		})
+	}
+}
+
+// TestAutomationBuildsLink builds the minimal app as nsgo dev -automation does (nsgodev,nsgoautomation) for each target supporting automation and checks that the agent and live test surface link cleanly.
+func TestAutomationBuildsLink(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("needs the go command")
+	}
+	for _, target := range [][2]string{{"darwin", "arm64"}, {"linux", "amd64"}} {
+		t.Run(target[0]+"_"+target[1], func(t *testing.T) {
+			t.Parallel()
+			linked := linkedPackages(t, target[0], target[1], "nsgodev,nsgoautomation")
+			for _, pkg := range []string{"github.com/nsgo-dev/nsgo/nsgotest", "github.com/nsgo-dev/nsgo/internal/testhost"} {
+				if !linked[pkg] {
+					t.Errorf("an automation build does not link %s", pkg)
+				}
 			}
 		})
 	}

@@ -98,11 +98,11 @@ type testOpen struct {
 // window is one GTK window and the tree it shows. The engine's goroutine
 // reaches its main-thread half only through Mount and post.
 type window struct {
-	testID  uint32  // the opened test surface, 0 for a regular window
-	batch   uint64  // batches applied
-	win     uintptr // GtkWindow, 0 for an embedded surface
-	surface uintptr // the NsgoView holding the root view
-	saves   driver.SavePreflights
+	surfaceID uint32  // the opened surface ID, 0 for the primary surface
+	batch     uint64  // batches applied
+	win       uintptr // GtkWindow, 0 for an embedded surface
+	surface   uintptr // the NsgoView holding the root view
+	saves     driver.SavePreflights
 	// primary is the backend's own surface. Opened surfaces share the GTK main loop, but closing one must not end the app.
 	primary bool
 	// opener is the app's own window for a surface the app opened, which goes when that window stops (stop).
@@ -296,6 +296,7 @@ type window struct {
 	alerting     bool
 	alertingID   uint32
 	alertShown   driver.AlertConfig // the alert showing, for a test host
+	alertCancel  uintptr            // GCancellable for the alert showing
 	menuCounter  uint32
 	actionGroup  uintptr
 	actionRefs   map[uintptr]menuRef
@@ -419,6 +420,7 @@ func start(app engine.App, opts Options) (*window, error) {
 
 	w.setAppearance(opts.Appearance)
 	w.startEngine(app, opts, driver.Size{Width: opts.Width, Height: opts.Height})
+	registerLiveWindow(0, w)
 	w.loop = gMainLoopNew(0, 0)
 	w.setupSettings()
 	return w, nil
@@ -525,12 +527,13 @@ func (w *window) openSurface(cfg driver.SurfaceConfig) {
 	}
 	child.setPointerEvents(cfg.PointerEvents)
 	child.env = child.environment()
+	child.surfaceID = cfg.ID
 	child.engine = w.engine.Attach(cfg.ID, child)
+	registerLiveWindow(cfg.ID, child)
 	if opts.test != nil {
 		if opts.test.windows == nil {
 			opts.test.windows = map[uint32]*window{}
 		}
-		child.testID = cfg.ID
 		opts.test.windows[cfg.ID] = child
 	}
 	size := driver.Size{Width: opts.Width, Height: opts.Height}
@@ -679,6 +682,7 @@ func (w *window) run() {
 // stop ends the engine, destroys the native components still showing
 // and frees the loop after run returns.
 func (w *window) stop() {
+	unregisterLiveWindow(w)
 	if !w.closing {
 		w.engine.Close()
 	}
@@ -863,9 +867,13 @@ func (w *window) shutdown(forced bool) {
 		return
 	}
 	w.closing = true
+	unregisterLiveWindow(w)
 	if forced {
 		w.engine.CloseForForcedQuit()
 		engine.SyncStorage()
+	}
+	if w.alertCancel != 0 {
+		gCancellableCancel(w.alertCancel)
 	}
 	w.unwatchSession()
 	w.closeAudio()
@@ -904,8 +912,9 @@ func (w *window) shutdown(forced bool) {
 
 // destroy ends an opened surface once its tree is gone (WindowDestroy): its views, its window and the handle its callbacks find it by go with it.
 func (w *window) destroy() {
-	if w.testID != 0 {
-		delete(w.opts.test.windows, w.testID)
+	unregisterLiveWindow(w)
+	if w.surfaceID != 0 && w.opts.test != nil {
+		delete(w.opts.test.windows, w.surfaceID)
 	}
 	if w.primary || w.embedded || w.win == 0 {
 		return

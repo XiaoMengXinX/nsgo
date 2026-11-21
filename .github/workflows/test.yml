@@ -153,6 +153,12 @@ jobs:
           GDK_BACKEND: x11
           GSK_RENDERER: cairo
         run: xvfb-run -a go tool nsgo test -target linux ./internal/testhost/testdata/pick
+      - name: Test Linux automation end to end
+        env:
+          GDK_BACKEND: x11
+          GSK_RENDERER: cairo
+          NSGO_AUTOMATION_E2E: '1'
+        run: xvfb-run -a go tool nsgo test -run '^TestAutomationEndToEnd$' ./cmd/nsgo
       - name: Run the many-sprite canvas scenario
         env:
           GDK_BACKEND: x11
