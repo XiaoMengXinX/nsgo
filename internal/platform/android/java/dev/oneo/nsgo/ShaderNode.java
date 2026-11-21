@@ -313,6 +313,8 @@ final class ShaderNode extends TextureView implements TextureView.SurfaceTexture
             synchronized (this) {
                 surface = s;
             }
+            // A frame handed over before the surface existed waits for it: its render may already have run, and draw() below may have found that render still pending.
+            render();
         });
         draw();
     }
@@ -381,6 +383,8 @@ final class ShaderNode extends TextureView implements TextureView.SurfaceTexture
         synchronized (this) {
             pending = false;
             s = surface;
+            // Without a surface the frame stays for onSurfaceTextureAvailable to draw.
+            if (s == null && !failed) return;
             block = frame;
             p = frameProgram;
             imgs = frameImages;

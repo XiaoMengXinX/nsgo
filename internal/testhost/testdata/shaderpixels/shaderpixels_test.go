@@ -132,7 +132,7 @@ func Fragment(dst vec4, pos vec2) vec4 {
 		want := palette[n%uint64(len(palette))]
 		timeout := 4 * time.Second
 		if n == 0 {
-			// The first version waits for the shader's GL surface, which the Android emulator's software renderer can take several seconds to create after a heavy test.
+			// The first version also waits for the shader's GL context and surface, which the Android emulator's software renderer can take seconds to create.
 			timeout = 20 * time.Second
 		}
 		deadline := time.Now().Add(timeout)
