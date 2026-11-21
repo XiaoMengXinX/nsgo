@@ -30,7 +30,7 @@ final class Protocol {
         int kind = in.read();
         if (kind == -1) return null;
 
-        if (kind < BATCH || kind > TEXT_REPLY) throw invalidMessage("unexpected message kind " + kind);
+        if (kind < BATCH || kind > TEXT_REQUEST) throw invalidMessage("unexpected message kind " + kind);
 
         int length;
         try {
@@ -392,7 +392,7 @@ final class Protocol {
     static final int EVENT_SPEAK = 90;
 
     static final int EVENT_SAVE_PREFLIGHT = 99;
-    static final int EVENT_SHARED = 97;
+    static final int EVENT_SHARED = 102;
 
     // Reasons carried in EVENT_VIDEO_PAUSE's index, as core.VideoPauseReason.
     static final int VIDEO_PAUSE_INTERRUPTION = 0;
