@@ -57,6 +57,7 @@ func TestASoundPlaysOnATap(t *testing.T) {
 
 func TestSoundSchedulesOnTheTestClockAndReadsLatency(t *testing.T) {
 	var sound *audio.Sound
+	var playbacks []*audio.Playback
 	var starts []time.Time
 	var latency time.Duration
 	var known, schedule bool
@@ -73,7 +74,7 @@ func TestSoundSchedulesOnTheTestClockAndReadsLatency(t *testing.T) {
 			first := audio.Now(cx).Add(time.Second)
 			starts = []time.Time{first, first.Add(500 * time.Millisecond)}
 			for _, at := range starts {
-				sound.Play(audio.Voice{StartAt: at})
+				playbacks = append(playbacks, sound.Play(audio.Voice{StartAt: at}))
 			}
 		}}
 	}, nsgotest.Environment(core.Environment{Audio: true, AudioSchedule: true}), func(a *nsgotest.App) {
@@ -87,6 +88,19 @@ func TestSoundSchedulesOnTheTestClockAndReadsLatency(t *testing.T) {
 	plays := app.Sounds[0].Plays
 	if len(plays) != 2 || !plays[0].StartAt.Equal(starts[0]) || !plays[1].StartAt.Equal(starts[1]) {
 		t.Fatalf("scheduled plays = %+v, want %v", plays, starts)
+	}
+	app.FastForward(starts[0].Sub(app.Clock.Now()) - time.Millisecond)
+	if playbacks[0].Ended() || playbacks[1].Ended() {
+		t.Fatal("a pending playback ended before its scheduled start")
+	}
+	app.Advance(22 * time.Millisecond)
+	if !playbacks[0].Ended() || playbacks[1].Ended() {
+		t.Fatal("scheduled playback completion did not follow its start")
+	}
+	playbacks[1].Stop()
+	app.Settle()
+	if !playbacks[1].Ended() || !app.Sounds[0].Playbacks[1].Ended {
+		t.Fatal("stopping a pending playback left it active")
 	}
 }
 
@@ -233,5 +247,111 @@ func TestASoundPlaysWithStereoPan(t *testing.T) {
 	}
 	if !slices.Equal(app.Sounds[0].Plays, want) {
 		t.Fatalf("plays = %+v, want %+v", app.Sounds[0].Plays, want)
+	}
+}
+
+func TestSoundPlaybackControlsAndEnds(t *testing.T) {
+	const uri = "asset:effect.wav"
+	var sound *audio.Sound
+	var changed *core.Signal[*audio.Playback]
+	app := nsgotest.Start(t, func(cx *core.Scope) core.Node {
+		changed = core.NewSignal[*audio.Playback](cx, nil)
+		audio.LoadSound(cx, audio.Source{URI: uri}, func(s *audio.Sound, err error) {
+			if err != nil {
+				t.Error(err)
+			}
+			sound = s
+		})
+		return core.Text{TestID: "status", ContentFunc: func() string {
+			if changed.Get().Ended() {
+				return "Ended"
+			}
+			return "Playing"
+		}}
+	}, playsAudio, func(a *nsgotest.App) { a.AudioDurations = map[string]time.Duration{uri: time.Second} })
+	first := sound.Play(audio.Voice{})
+	second := sound.Play(audio.Voice{Muted: true})
+	changed.Set(second)
+	app.Settle()
+	if first.Ended() || second.Ended() || app.Find("id:status").Text != "Playing" {
+		t.Fatal("two independent playbacks should be active")
+	}
+	p := app.Sounds[0].Playbacks
+	if p[1].Volume != 0 {
+		t.Fatalf("the muted playback started with volume %v", p[1].Volume)
+	}
+	first.Stop()
+	second.SetVolume(0.25)
+	second.SetRate(2)
+	app.Settle()
+	if !first.Ended() || second.Ended() || !p[0].Ended || p[1].Ended || p[1].Volume != 0.25 || p[1].Rate != 2 {
+		t.Fatalf("independent stop and settings gave %+v, %+v", p[0], p[1])
+	}
+	second.SetVolume(0)
+	app.Settle()
+	if p[1].Volume != 0 || second.Ended() {
+		t.Fatal("zero volume must silence a playback without ending it")
+	}
+	app.Advance(499 * time.Millisecond)
+	if second.Ended() {
+		t.Fatal("playback ended before the source duration at its new rate")
+	}
+	app.Advance(2 * time.Millisecond)
+	if !second.Ended() || !p[1].Ended || app.Find("id:status").Text != "Ended" {
+		t.Fatal("the reactive playback state did not observe completion")
+	}
+
+	plays := make([]*audio.Playback, 33)
+	for i := range plays {
+		plays[i] = sound.Play(audio.Voice{})
+	}
+	app.Settle()
+	for i, play := range plays {
+		if play.Ended() != (i == 0) {
+			t.Fatalf("playback %d: ended = %v", i, play.Ended())
+		}
+	}
+	sound.Stop()
+	app.Settle()
+	if !plays[len(plays)-1].Ended() {
+		t.Fatal("Sound.Stop left a playback active")
+	}
+	last := sound.Play(audio.Voice{})
+	app.Settle()
+	sound.Close()
+	app.Settle()
+	if !last.Ended() || !sound.Play(audio.Voice{}).Ended() {
+		t.Fatal("closing the buffer left an active playback")
+	}
+}
+
+func TestPlayerMuteKeepsItsTimelineAndVolume(t *testing.T) {
+	var player *audio.Player
+	const uri = "asset:music.wav"
+	app := nsgotest.Start(t, func(cx *core.Scope) core.Node {
+		player = audio.NewPlayer(cx, audio.Source{URI: uri}, audio.PlayerOptions{})
+		return core.View{}
+	}, playsAudio, func(a *nsgotest.App) { a.AudioDurations = map[string]time.Duration{uri: time.Second} })
+
+	player.SetMuted(true)
+	player.Play(nil)
+	app.Settle()
+	app.Advance(250 * time.Millisecond)
+	model := app.Players[0]
+	if !model.Playing || model.Volume != 0 || player.Position() != 250*time.Millisecond {
+		t.Fatalf("muted play = %+v, position = %v", model, player.Position())
+	}
+	player.SetVolume(0.5)
+	app.Settle()
+	if model.Volume != 0 {
+		t.Fatalf("setting volume removed mute: %+v", model)
+	}
+	player.SetMuted(false)
+	app.Advance(250 * time.Millisecond)
+	if !model.Playing || model.Volume != 0.5 || player.Position() != 500*time.Millisecond {
+		t.Fatalf("unmuted play = %+v, position = %v", model, player.Position())
+	}
+	if want := []string{"open", "resume", "set", "set"}; !slices.Equal(model.Commands, want) {
+		t.Fatalf("commands = %v, want %v", model.Commands, want)
 	}
 }
