@@ -152,6 +152,8 @@ NSH has no local service discovery API. On macOS and iOS, the system's DNS-SD li
 
 On Linux, GTK's GDBus calls Avahi asynchronously on the system bus. The backend prepares each browser and subscribes to its signals before starting it, so cached services reach the app. Results from interfaces and address families are grouped by endpoint. Discovery reports an asynchronous error when Avahi is unavailable.
 
+On Windows, the backend loads the system's DNS-SD API from `dnsapi.dll`. It registers a service in `local`, browses PTR results on all interfaces and resolves each instance once. A goodbye record cancels its pending resolve or removes its reported endpoint. Native callbacks copy their results for the window thread and free the native records. Each window cancels its queries and deregisters its advertisements when it closes. DNSAPI takes NUL-terminated Unicode TXT keys and values, so Windows advertisements accept UTF-8 text values without NUL.
+
 ## Speech
 
 `StartSpeech` recognizes what the user says, NSH's `Speech.start`: one session per engine, which a new one and its scope's end abort. It reports the whole transcript so far, before it is final with `Interim`, and ends once with the last one and a `SpeechError` named as the Web Speech API's (`not-allowed`, `no-speech`, `audio-capture`, `network`, `language-not-supported`, `unavailable`, `failed`). `Stop` has the recognizer finish what it heard; `Abort` ends it at once. A `Lang` of "" is the app's locale.

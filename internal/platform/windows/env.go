@@ -85,6 +85,7 @@ func (w *window) environment() driver.Environment {
 		IncreaseContrast: highContrastEnabled(),
 		ScreenReader:     systemFlag(spiGetScreenReader, false),
 		ScreenColor:      true,
+		DiscoverServices: dnsAvailable(),
 		RTL:              rightToLeft(locale),
 		PixelRatio:       float32(w.scale),
 		Locale:           locale,

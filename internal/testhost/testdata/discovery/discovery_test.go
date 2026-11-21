@@ -1,6 +1,7 @@
 package discovery_test
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -16,8 +17,9 @@ import (
 func TestMain(m *testing.M) { nsgotest.Main(m) }
 
 func TestLocalServiceAdvertiseBrowseAndRemove(t *testing.T) {
-	switch nsgotest.Target() {
-	case "macos", "ios", "ios_simulator", "linux":
+	target := nsgotest.Target()
+	switch target {
+	case "macos", "ios", "ios_simulator", "linux", "windows":
 	default:
 		t.Skip("checks native DNS-SD")
 	}
@@ -27,6 +29,11 @@ func TestLocalServiceAdvertiseBrowseAndRemove(t *testing.T) {
 	}
 	defer listener.Close()
 	name := fmt.Sprintf("NSGo test %d", os.Getpid())
+	topic := "\x00\xff"
+	if target == "windows" {
+		// DNSAPI's TXT interface uses NUL-terminated UTF-16.
+		topic = "café"
+	}
 	port := listener.Addr().(*net.TCPAddr).Port
 	var mu sync.Mutex
 	var replies []core.ServiceEvent
@@ -50,9 +57,12 @@ func TestLocalServiceAdvertiseBrowseAndRemove(t *testing.T) {
 				mu.Unlock()
 			}
 		})
-		report(err)
+		if err != nil {
+			report(err)
+			return core.View{}
+		}
 		stop, err = cx.AdvertiseService(core.LocalService{
-			Name: name, Type: "_nsgo-test._tcp", Port: port, TXT: map[string]string{"version": "1", "data": "\x00\xff"},
+			Name: name, Type: "_nsgo-test._tcp", Port: port, TXT: map[string]string{"version": "1", "data": topic},
 		}, report)
 		report(err)
 		return core.View{}
@@ -66,6 +76,9 @@ func TestLocalServiceAdvertiseBrowseAndRemove(t *testing.T) {
 		})
 		mu.Lock()
 		defer mu.Unlock()
+		if target == "windows" && errors.Is(failure, core.ErrDiscoveryUnavailable) {
+			t.Skip("Windows DNS-SD exports are unavailable")
+		}
 		if failure != nil {
 			t.Fatal(failure)
 		}
@@ -73,7 +86,7 @@ func TestLocalServiceAdvertiseBrowseAndRemove(t *testing.T) {
 	}
 	add := wait(1)
 	if add.Removed || add.Service.Port != port || add.Service.Host == "" || add.Service.TXT["version"] != "1" ||
-		add.Service.TXT["data"] != "\x00\xff" {
+		add.Service.TXT["data"] != topic {
 		t.Fatalf("resolved advertisement: %+v", add)
 	}
 	scope.Post(stop)

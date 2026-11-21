@@ -227,7 +227,7 @@ The content stays mounted but hidden while it waits, so it shows at once when th
 
 ### Discovering local services
 
-On macOS, iOS and Linux, `cx.AdvertiseService` publishes a listening port and TXT attributes. `cx.BrowseServices` reports resolved services with their host, port and TXT attributes, then reports them again with `Removed` when they leave. Check `cx.Env().CanDiscoverServices()` for platform support. Both calls return a stop function and end when their scope is disposed. A platform error is reported asynchronously on the engine goroutine. Linux uses Avahi and reports an error if the daemon is unavailable.
+On macOS, iOS, Windows and Linux, `cx.AdvertiseService` publishes a listening port and TXT attributes. `cx.BrowseServices` reports resolved services with their host, port and TXT attributes, then reports them again with `Removed` when they leave. Check `cx.Env().CanDiscoverServices()` for platform support. Both calls return a stop function and end when their scope is disposed. A platform error is reported asynchronously on the engine goroutine. Linux uses Avahi and reports an error if the daemon is unavailable. Windows uses the system DNS-SD API, which accepts UTF-8 text TXT values without NUL.
 
 For Bonjour on Apple platforms, declare the service types and explain local network access in `nsgo.yaml`. The system manages the permission prompt and remembers the user's choice.
 
