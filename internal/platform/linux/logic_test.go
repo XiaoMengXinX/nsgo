@@ -658,6 +658,7 @@ func TestTouchBrakingClaimsGlideAndSnap(t *testing.T) {
 		style:  visible,
 		kind:   driver.KindScroll,
 		parent: root,
+		style:  visible,
 		frame:  driver.Bounds{Size: driver.Size{Width: 300, Height: 400}},
 		size:   driver.Size{Width: 300, Height: 2000},
 		events: 1<<driver.EventScrollDragStart | 1<<driver.EventScrollDragEnd |
@@ -668,6 +669,7 @@ func TestTouchBrakingClaimsGlideAndSnap(t *testing.T) {
 		style:  visible,
 		kind:   driver.KindView,
 		parent: scroll,
+		style:  visible,
 		frame:  driver.Bounds{Size: driver.Size{Width: 300, Height: 2000}},
 		events: 1<<driver.EventPressDown | 1<<driver.EventPressUp | 1<<driver.EventPress,
 	}
