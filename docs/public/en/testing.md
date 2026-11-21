@@ -104,7 +104,7 @@ The app reads this clock with `cx.Now()`, and the date it shows with `cx.WallTim
 
 Headless, these waits advance the clock a frame at a time between checks. Start with `nsgotest.ManualFrames()` to keep the clock still during a wait. On a target the waits settle the app while the platform runs its own animations.
 
-A screen that depends on the date, such as what is due today, starts with `nsgotest.WallTime(t0)`: the first render's `cx.WallTime()` is `t0`, in its location, and timers keep running on the clock's own time. `nsgotest.Clock(c)` runs the app on a clock of the test's own, so code outside the app shares it; the app's timers fire as `c.Advance` moves it. A measurement on a target, started with `nsgotest.Measure()`, runs the app on the system's clock instead, as described below.
+A screen that depends on the date, such as what is due today, starts with `nsgotest.WallTime(t0)`: the first render's `cx.WallTime()` is `t0`, in its location, and timers keep running on the clock's own time. `nsgotest.Clock(c)` runs the app on a clock of the test's own, so code outside the app shares it; the app's timers fire as `c.Advance` moves it. `nsgotest.CrashReports(reports...)` seeds synthetic pending crash reports in the test app's crash store before mount so crash-upload dialogs can be tested, `app.AddCrashReport` adds one mid-test, and `app.PendingCrashReports()` checks which reports remain unacknowledged. A measurement on a target, started with `nsgotest.Measure()`, runs the app on the system's clock instead, as described below.
 
 ## Run on a platform
 
