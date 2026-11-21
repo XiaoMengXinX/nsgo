@@ -352,10 +352,6 @@ cx.Speak("Guten Morgen", core.Voice{Lang: "de-DE", Rate: 0.8}, func(stopped bool
 
 `Rate` and `Pitch` run from 0.5 to 2, 1 being the voice's own. `cx.Voices("ja", ...)` lists the voices installed for a language, so the app can ask the user to install one it lacks or let them pick one, whose `ID` goes in `core.Voice`. Browsers speak only after the user has pressed something on the page, and fail with `core.SpeakNotAllowed` before. A TSX package's Go components speak only with the `text_to_speech` capability.
 
-## Audio playback
-
-Use `audio.LoadSound` for short cues that can overlap and `audio.NewPlayer` for streamed audio with playback controls. macOS, iOS and Android support WAV, AAC (`.m4a`) and MP3. Use `cx.Env().CanPlayAudio` to detect playback support. Android pauses a player when its view leaves the screen and limits each decoded sound to 1 MiB.
-
 ## Biometrics
 
 `cx.BiometricAvailability` reports whether Face ID, Touch ID or a device fingerprint is enrolled; Android does not say which kind is enrolled, so there it reports a fingerprint when one is enrolled and otherwise face when the device has face hardware. `cx.AuthenticateBiometric` asks the system to confirm the user with a reason, which must not be empty, and reports success, failure, cancellation or unavailability. It does not choose a passcode fallback for the app.
@@ -589,7 +585,7 @@ audio.LoadSound(cx, audio.Source{URI: "asset:sounds/click.wav"}, func(click *aud
 })
 ```
 
-`audio.Voice` sets per-playback `Volume` (0 to 1, 0 as 1), `Rate` (0.5 to 2, 0 as 1) and `Pan` (-1 full left to 1 full right, 0 centered); values outside those ranges are clamped and NaN takes the default. `Sound.Stop` stops all playbacks of the sound and `Close` frees it, as its owning scope does when disposed. `Player` supports `Play`, `Preload`, `Pause`, `Seek`, `SetVolume`, `SetRate`, `SetLoop` and `Close`. macOS, iOS, Linux and the web play audio today. Apple and browser backends support WAV, AAC and MP3. Linux uses GStreamer codecs, and its streamed player plays at 1×. Windows and Android still report `CanPlayAudio` false.
+`audio.Voice` sets per-playback `Volume` (0 to 1, 0 as 1), `Rate` (0.5 to 2, 0 as 1) and `Pan` (-1 full left to 1 full right, 0 centered); values outside those ranges are clamped and NaN takes the default. `Sound.Stop` stops all playbacks of the sound and `Close` frees it, as its owning scope does when disposed. `Player` supports `Play`, `Preload`, `Pause`, `Seek`, `SetVolume`, `SetRate`, `SetLoop` and `Close`. macOS, iOS, Linux, Android and the web play audio today. Apple and browser backends support WAV, AAC and MP3. Linux uses GStreamer codecs, and its streamed player plays at 1×. Windows still reports `CanPlayAudio` false. Android pauses a player when its view leaves the screen and limits each decoded sound to 1 MiB.
 
 Browsers require a user gesture for audible playback. Load short sounds ahead of time, then call `Sound.Play` after a click, tap or key press. A sound played before a gesture is silent. A player's `Play` callback receives `audio.NotAllowed` if the browser blocks playback. Retry from a user gesture.
 
