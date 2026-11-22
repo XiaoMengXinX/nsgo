@@ -116,6 +116,15 @@ func buildAndroidPackage(ctx context.Context, p *project, dir, ext string,
 			return "", err
 		}
 		files = append(files, apk.File{Name: "lib/" + abi + "/libnsgo.so", Data: app})
+		cgo := "CGO_ENABLED=0"
+		if goarch != "arm64" {
+			cgo = "CGO_ENABLED=1"
+		}
+		nativeLibs, err := addAndroidLibraries(ctx, p, []string{"GOOS=android", "GOARCH=" + goarch, cgo}, goarch, abi)
+		if err != nil {
+			return "", err
+		}
+		files = append(files, nativeLibs...)
 		required, err := androidLibraries(ctx, p, goarch, app)
 		if err != nil {
 			return "", err

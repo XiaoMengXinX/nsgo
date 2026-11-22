@@ -118,9 +118,42 @@ android:
 
 应用支持物理手柄时，设置 `gamepad: true`。Android 将手柄和触摸屏声明为可选。macOS、iOS 和 tvOS 声明 Extended Gamepad 配置，tvOS 还声明 Siri Remote 的 Micro Gamepad 配置，`apple.info` 中的手柄键优先。
 
+## 原生库
+
+第三方 Go 包可以在自己的包目录下放置 `nsgo.natives.yaml` 声明需要随包分发的动态库。任何链接该包的应用在 `nsgo build`、`nsgo dev` 和 `nsgo test -target` 中都会自动打包这些库，应用开发者无需在 `nsgo.yaml` 中做额外配置。
+
+```yaml
+version: 1
+licenses:
+  - third_party/LICENSE.txt
+targets:
+  macos_arm64:
+    - name: libaudio.dylib
+      url: https://example.com/releases/v1.0.0/libaudio-macos-arm64.dylib
+      sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  macos_x64:
+    - name: libaudio.dylib
+      url: https://example.com/releases/v1.0.0/libaudio-macos-x64.dylib
+      sha256: fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210
+  windows_x64:
+    - name: audio.dll
+      path: native/windows-x64/audio.dll
+      sha256: 1111111111111111111111111111111111111111111111111111111111111111
+  linux_x64:
+    - name: libaudio.so
+      path: native/linux-x64/libaudio.so
+```
+
+`nsgo.natives.yaml` 必须包含 `version: 1` 并拒绝未知字段。目标键支持 `macos_arm64`、`macos_x64`、`windows_arm64`、`windows_x64`、`linux_arm64`、`linux_x64`、`ios`、`ios_simulator`、`tvos`、`tvos_simulator`、`android_arm64` 和 `android_x64`。每项需填写不含路径分隔符的库文件名 `name`，并二选一指定 `https` 的 `url`（必须附带 64 位十六进制 `sha256`）或包目录内的相对路径 `path`（`sha256` 可选）。远程库下载时会校验 `sha256`，并在用户缓存中仅下载一次。
+
+- macOS 将库放入 `Contents/Frameworks`，在 `macos_universal` 构建中用 `lipo` 合并不同的 `macos_arm64` 与 `macos_x64` 库，并在应用签名和公证前先行签名。
+- Windows 和 Linux 将库放在可执行文件旁，Windows 库会随 `sign.certificate` 或 `sign.sign_command` 签名，并自动打进安装程序与商店包。
+- iOS 和 tvOS 将库封装为 `Frameworks/<Name>.framework`（可用 `framework` 覆盖默认名称）并随应用框架签名；Android 将库放入 APK 与 App Bundle 的 `lib/<abi>/`。
+- 顶层或每项下的 `licenses` 列出包目录内的相对许可证或声明文件；`nsgo build` 会将其自动合并进 `THIRD_PARTY_NOTICES.txt` 与 `core.ThirdPartyNotices()`，并按 `licenses` 策略检查。
+
 ## 许可证声明
 
-`nsgo build` 将 `THIRD_PARTY_NOTICES.txt` 放入独立应用包的资源中，包含目标使用的 Go 模块、Go 运行时和 NSGo 随包提供的 Java 或 JavaScript 运行时的许可证文本。Web 构建按文件内容为其命名，与其他资源一致。应用可通过 `core.ThirdPartyNotices()` 在致谢页面显示相同的文本。开发构建、测试和嵌入库构建中此函数返回空字符串。
+`nsgo build` 将 `THIRD_PARTY_NOTICES.txt` 放入独立应用包的资源中，包含目标使用的 Go 模块、Go 运行时、NSGo 随包提供的 Java 或 JavaScript 运行时，以及所链接包在 `nsgo.natives.yaml` 中声明的原生库许可证与声明文件。Web 构建按文件内容为其命名，与其他资源一致。应用可通过 `core.ThirdPartyNotices()` 在致谢页面显示相同的文本。开发构建、测试和嵌入库构建中此函数返回空字符串。
 
 默认情况下，缺少第三方许可证或无法识别其许可证会使构建失败，检测到著佐权（copyleft）许可证时会发出警告。两条规则均可设为 `error` 或 `warn`。`allow` 按完整的模块路径免除两条规则，构建找到的许可证文本仍会打包。
 

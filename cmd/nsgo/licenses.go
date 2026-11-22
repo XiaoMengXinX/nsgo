@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -60,6 +61,7 @@ type licenseSource struct {
 	name, label, root string
 	firstParty        bool
 	dirs              map[string]bool
+	extraFiles        map[string]bool
 }
 
 var licenseClassifier = sync.OnceValues(assets.DefaultClassifier)
@@ -111,6 +113,7 @@ func (p *project) listLicenseSources(ctx context.Context, env, tags, flags []str
 		return false, fmt.Errorf("list linked packages for license notices: %w\n%s", err, strings.TrimSpace(stderr.String()))
 	}
 
+	target := licenseTargetForEnv(env)
 	var hasCore bool
 	dec := json.NewDecoder(bytes.NewReader(out))
 	for {
@@ -150,7 +153,79 @@ func (p *project) listLicenseSources(ctx context.Context, env, tags, flags []str
 			hasCore = true
 		}
 		addLicensePackage(sources, pkg)
+		if target != "" && pkg.Dir != "" {
+			if err := addNativeLicenseFiles(sources[pkg.Module.Path], pkg, target); err != nil {
+				return false, err
+			}
+		}
 	}
+}
+
+func licenseTargetForEnv(env []string) string {
+	goos, goarch := runtime.GOOS, runtime.GOARCH
+	var cflags string
+	for _, setting := range env {
+		switch {
+		case strings.HasPrefix(setting, "GOOS="):
+			goos = strings.TrimPrefix(setting, "GOOS=")
+		case strings.HasPrefix(setting, "GOARCH="):
+			goarch = strings.TrimPrefix(setting, "GOARCH=")
+		case strings.HasPrefix(setting, "CGO_CFLAGS="):
+			cflags = strings.TrimPrefix(setting, "CGO_CFLAGS=")
+		case strings.HasPrefix(setting, "CC=") && cflags == "":
+			cflags = strings.TrimPrefix(setting, "CC=")
+		}
+	}
+	switch goos {
+	case "darwin":
+		return "macos_" + goArchName(goarch)
+	case "windows", "linux", "android":
+		return goos + "_" + goArchName(goarch)
+	case "ios":
+		target := "ios"
+		if strings.Contains(cflags, "tvos") {
+			target = "tvos"
+		}
+		if strings.Contains(cflags, "-simulator") {
+			target += "_simulator"
+		}
+		return target
+	}
+	return ""
+}
+
+func addNativeLicenseFiles(source *licenseSource, pkg licensePackage, target string) error {
+	m, ok, err := loadNativeManifest(pkg.Dir)
+	if err != nil {
+		return fmt.Errorf("%s: %w", pkg.ImportPath, err)
+	}
+	if !ok {
+		return nil
+	}
+	specs := m.Targets[target]
+	if len(specs) == 0 {
+		return nil
+	}
+	lists := make([][]string, 0, 1+len(specs))
+	lists = append(lists, m.Licenses)
+	for _, spec := range specs {
+		lists = append(lists, spec.Licenses)
+	}
+	files, err := collectManifestLicenses(pkg.Dir, lists...)
+	if err != nil {
+		return fmt.Errorf("%s: %w", pkg.ImportPath, err)
+	}
+	for _, file := range files {
+		source.addExtraFile(file)
+	}
+	return nil
+}
+
+func (source *licenseSource) addExtraFile(path string) {
+	if source.extraFiles == nil {
+		source.extraFiles = map[string]bool{}
+	}
+	source.extraFiles[filepath.Clean(path)] = true
 }
 
 func addLicensePackage(sources map[string]*licenseSource, pkg licensePackage) {
@@ -231,6 +306,60 @@ func (p *project) renderLicenseNotices(ctx context.Context, sources map[string]*
 		types := map[string]bool{}
 		var unknown []string
 		var documents int
+		seenFiles := map[string]bool{}
+		markSeen := func(path string) bool {
+			clean := filepath.Clean(path)
+			realPath, err := filepath.EvalSymlinks(clean)
+			if err != nil {
+				realPath = clean
+			}
+			if seenFiles[clean] || seenFiles[realPath] {
+				return false
+			}
+			seenFiles[clean] = true
+			seenFiles[realPath] = true
+			return true
+		}
+		displayName := func(path string) string {
+			if rel, err := filepath.Rel(source.root, path); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel) {
+				return filepath.ToSlash(rel)
+			}
+			if realRoot, err := filepath.EvalSymlinks(source.root); err == nil {
+				if realPath, err := filepath.EvalSymlinks(path); err == nil {
+					if rel, err := filepath.Rel(realRoot, realPath); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && !filepath.IsAbs(rel) {
+						return filepath.ToSlash(rel)
+					}
+				}
+			}
+			return filepath.Base(path)
+		}
+		appendDoc := func(path string, primary bool) error {
+			if !markSeen(path) {
+				return nil
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return fmt.Errorf("read license for %s: %w", source.name, err)
+			}
+			filename := displayName(path)
+			known := false
+			for _, match := range classifier.Match(data).Matches {
+				if match.MatchType == "License" {
+					types[match.Name] = true
+					known = true
+				}
+			}
+			if primary && !known {
+				unknown = append(unknown, filename)
+			}
+			fmt.Fprintf(&section, "\n%s\n\n", filename)
+			section.Write(data)
+			documents++
+			if !bytes.HasSuffix(data, []byte("\n")) {
+				section.WriteByte('\n')
+			}
+			return nil
+		}
 		for _, dir := range slices.Sorted(maps.Keys(source.dirs)) {
 			files, err := os.ReadDir(dir)
 			if err != nil {
@@ -241,29 +370,14 @@ func (p *project) renderLicenseNotices(ctx context.Context, sources map[string]*
 				if f.IsDir() || !include {
 					continue
 				}
-				path := filepath.Join(dir, f.Name())
-				data, err := os.ReadFile(path)
-				if err != nil {
-					return "", fmt.Errorf("read license for %s: %w", source.name, err)
+				if err := appendDoc(filepath.Join(dir, f.Name()), primary); err != nil {
+					return "", err
 				}
-				rel, _ := filepath.Rel(source.root, path)
-				filename := filepath.ToSlash(rel)
-				known := false
-				for _, match := range classifier.Match(data).Matches {
-					if match.MatchType == "License" {
-						types[match.Name] = true
-						known = true
-					}
-				}
-				if primary && !known {
-					unknown = append(unknown, filename)
-				}
-				fmt.Fprintf(&section, "\n%s\n\n", filename)
-				section.Write(data)
-				documents++
-				if !bytes.HasSuffix(data, []byte("\n")) {
-					section.WriteByte('\n')
-				}
+			}
+		}
+		for _, path := range slices.Sorted(maps.Keys(source.extraFiles)) {
+			if err := appendDoc(path, !isNoticeOnlyDocument(filepath.Base(path))); err != nil {
+				return "", err
 			}
 		}
 		if source.firstParty && documents == 0 {
@@ -306,6 +420,25 @@ func isLicenseDocument(name string) (primary, include bool) {
 		return false, true
 	}
 	return false, false
+}
+
+func isNoticeOnlyDocument(name string) bool {
+	primary, include := isLicenseDocument(name)
+	if include {
+		return !primary
+	}
+	upper := strings.ToUpper(strings.TrimSuffix(name, filepath.Ext(name)))
+	for _, token := range strings.FieldsFunc(upper, func(r rune) bool {
+		return r == '-' || r == '_' || r == '.' || r == ' '
+	}) {
+		switch token {
+		case "LICENSE", "LICENCE", "COPYING", "UNLICENSE", "OFL":
+			return false
+		case "NOTICE", "NOTICES", "COPYRIGHT", "PATENTS":
+			return true
+		}
+	}
+	return false
 }
 
 func copyleftLicense(id string) bool {

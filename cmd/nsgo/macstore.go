@@ -95,8 +95,7 @@ func buildMacStorePackage(ctx context.Context, p *project, app, dir, arch string
 	}
 	defer os.Remove(path)
 	stage(ctx, "signing for the Mac App Store")
-	libs, _ := filepath.Glob(filepath.Join(app, "Contents", "Frameworks", "*.dylib"))
-	for _, lib := range libs {
+	for _, lib := range macFrameworkLibraries(app) {
 		if err := run(ctx, "codesign", "--force", "--sign", identity, lib); err != nil {
 			return "", err
 		}

@@ -627,9 +627,9 @@ func buildMacUniversal(ctx context.Context, p *project, dir string) error {
 	return p.releaseInstaller("macos_universal", dmg)
 }
 
-// lipoMacBinaries replaces every executable or dylib that differs between the two architecture bundles with a universal binary. One that is the same in both, such as Sparkle's helpers or a library already universal, stays as it is, signature included, as lipo refuses to join two files of the same architectures. Resource files remain those from the arm64 bundle, which are identical inputs from buildMacApp.
+// lipoMacBinaries replaces every executable or dynamic library that differs between the two architecture bundles with a universal binary, and copies any architecture-only library from other into app. One that is the same in both, such as Sparkle's helpers or a library already universal, stays as it is, signature included, as lipo refuses to join two files of the same architectures. Resource files remain those from the arm64 bundle, which are identical inputs from buildMacApp.
 func lipoMacBinaries(ctx context.Context, app, other string) error {
-	return filepath.WalkDir(app, func(path string, entry fs.DirEntry, walkErr error) error {
+	err := filepath.WalkDir(app, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil || entry.IsDir() {
 			return walkErr
 		}
@@ -638,7 +638,7 @@ func lipoMacBinaries(ctx context.Context, app, other string) error {
 			return err
 		}
 		relSlash := filepath.ToSlash(rel)
-		if !strings.HasSuffix(relSlash, ".dylib") && !strings.HasPrefix(relSlash, "Contents/MacOS/") && !strings.Contains(relSlash, "/Contents/MacOS/") {
+		if !isMacNativeLibrary(relSlash) && !strings.HasPrefix(relSlash, "Contents/MacOS/") && !strings.Contains(relSlash, "/Contents/MacOS/") {
 			return nil
 		}
 		otherPath := filepath.Join(other, rel)
@@ -652,6 +652,18 @@ func lipoMacBinaries(ctx context.Context, app, other string) error {
 		}
 		return run(ctx, "lipo", "-create", path, otherPath, "-output", path)
 	})
+	if err != nil {
+		return err
+	}
+	for _, otherLib := range macFrameworkLibraries(other) {
+		dst := filepath.Join(app, "Contents", "Frameworks", filepath.Base(otherLib))
+		if _, err := os.Stat(dst); errors.Is(err, os.ErrNotExist) {
+			if err := copyLibrary(otherLib, dst); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // rewriteUniversalFeed points the joined bundle's Sparkle feed, the arm64 build's, at macos_universal's appcast.
@@ -677,7 +689,7 @@ func signUniversalAdHoc(ctx context.Context, p *project, app string) error {
 		}
 	}
 	err := filepath.WalkDir(filepath.Join(app, "Contents"), func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil || entry.IsDir() || !strings.HasSuffix(path, ".dylib") {
+		if walkErr != nil || entry.IsDir() || !isMacNativeLibrary(path) {
 			return walkErr
 		}
 		return run(ctx, "codesign", "--force", "--sign", "-", path)
@@ -994,7 +1006,10 @@ func buildWindows(ctx context.Context, p *project, dir, arch string) error {
 	if err := copyResources(p, dir); err != nil {
 		return err
 	}
-	return addWinSparkle(ctx, p, dir, arch)
+	if err := addWinSparkle(ctx, p, dir, arch); err != nil {
+		return err
+	}
+	return addWindowsLibraries(ctx, p, dir, arch)
 }
 
 // buildLinux writes <dir>/<name> with the resources and icon beside it.
@@ -1007,7 +1022,10 @@ func buildLinux(ctx context.Context, p *project, dir, arch string) error {
 	if err := copyResources(p, dir); err != nil {
 		return err
 	}
-	return writeLinuxIcon(p, dir)
+	if err := writeLinuxIcon(p, dir); err != nil {
+		return err
+	}
+	return addLinuxLibraries(ctx, p, dir, arch)
 }
 
 // buildFPS is -fps: the site starts its app with --nsgo-fps, which a page

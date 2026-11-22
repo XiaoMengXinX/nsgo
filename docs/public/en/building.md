@@ -118,9 +118,42 @@ Set `game: true` in `nsgo.yaml` for a game. Android classifies the app as a game
 
 Set `gamepad: true` when your app handles a hardware gamepad. Android declares both gamepad and touchscreen optional. macOS, iOS and tvOS declare the Extended Gamepad profile, and tvOS also the Siri Remote's Micro Gamepad, with controller keys in `apple.info` taking precedence.
 
+## Native libraries
+
+A third-party Go package can declare shared libraries in `nsgo.natives.yaml` inside its package directory. Any app that links that package ships those libraries automatically in `nsgo build`, `nsgo dev` and `nsgo test -target`, with no extra configuration in `nsgo.yaml`.
+
+```yaml
+version: 1
+licenses:
+  - third_party/LICENSE.txt
+targets:
+  macos_arm64:
+    - name: libaudio.dylib
+      url: https://example.com/releases/v1.0.0/libaudio-macos-arm64.dylib
+      sha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+  macos_x64:
+    - name: libaudio.dylib
+      url: https://example.com/releases/v1.0.0/libaudio-macos-x64.dylib
+      sha256: fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210
+  windows_x64:
+    - name: audio.dll
+      path: native/windows-x64/audio.dll
+      sha256: 1111111111111111111111111111111111111111111111111111111111111111
+  linux_x64:
+    - name: libaudio.so
+      path: native/linux-x64/libaudio.so
+```
+
+`nsgo.natives.yaml` requires `version: 1` and refuses unknown fields. Target keys are `macos_arm64`, `macos_x64`, `windows_arm64`, `windows_x64`, `linux_arm64`, `linux_x64`, `ios`, `ios_simulator`, `tvos`, `tvos_simulator`, `android_arm64` and `android_x64`. Each entry sets a bare library file `name` and either an `https` `url` (with a mandatory 64-hex `sha256`) or a relative `path` inside the package directory (with an optional `sha256`). Remote downloads are verified against `sha256` and cached once in the user cache.
+
+- macOS places libraries in `Contents/Frameworks`, joins differing `macos_arm64` and `macos_x64` libraries with `lipo` for `macos_universal`, and signs and notarizes them before the app.
+- Windows and Linux place libraries beside the executable, sign Windows libraries with `sign.certificate` or `sign.sign_command`, and include them in installers and store packages.
+- iOS and tvOS wrap libraries into `Frameworks/<Name>.framework` (set `framework` to override the derived name) and sign them with the app's frameworks; Android places them under `lib/<abi>/` in the APK and App Bundle.
+- `licenses` (at the manifest top level or per library) lists relative license or notice files inside the package directory; `nsgo build` merges them into `THIRD_PARTY_NOTICES.txt` and `core.ThirdPartyNotices()` and checks them under `licenses`.
+
 ## License notices
 
-`nsgo build` puts `THIRD_PARTY_NOTICES.txt` in the standalone package's resources. It includes the license texts of the Go modules used by that target, the Go runtime and NSGo's bundled Java or JavaScript runtime. Web builds name the file by its content, as for other resources. Use `core.ThirdPartyNotices()` to show the same text in an in-app credits screen. The function returns an empty string in development, tests and builds of embedded libraries.
+`nsgo build` puts `THIRD_PARTY_NOTICES.txt` in the standalone package's resources. It includes the license texts of the Go modules used by that target, the Go runtime, NSGo's bundled Java or JavaScript runtime, and any license or notice files declared in linked packages' `nsgo.natives.yaml`. Web builds name the file by its content, as for other resources. Use `core.ThirdPartyNotices()` to show the same text in an in-app credits screen. The function returns an empty string in development, tests and builds of embedded libraries.
 
 By default an unknown or missing third-party license fails the build and a detected copyleft license warns. Set either rule to `error` or `warn`. The `allow` list exempts exact module paths from both rules and keeps any license text the build found.
 

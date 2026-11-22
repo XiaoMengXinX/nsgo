@@ -77,6 +77,8 @@ Publish built web and desktop packages with `go tool nsgo publish itch -target w
 
 Standalone builds bundle `THIRD_PARTY_NOTICES.txt`. Show the text with `core.ThirdPartyNotices()`. Configure missing or unrecognized licenses with `licenses.unknown`, copyleft handling with `licenses.copyleft`, and reviewed exceptions by exact module path in `licenses.allow`.
 
+Third-party Go packages can ship per-target native libraries by adding a strict `nsgo.natives.yaml` (`version: 1`) in their package directory with per-target entries (`macos_arm64`, `macos_x64`, `windows_arm64`, `windows_x64`, `linux_arm64`, `linux_x64`, `ios`, `ios_simulator`, `tvos`, `tvos_simulator`, `android_arm64`, `android_x64`), each specifying `name`, either an `https` `url` + `sha256` (cached in the user cache) or a relative `path`, and optional relative `licenses` files. `nsgo build`, `nsgo dev` and `nsgo test -target` stage, `lipo` (`macos_universal`), sign, package and include their license notices automatically without app configuration ([Native libraries](https://nsgo.dev/docs/building.md#native-libraries)).
+
 ## Documents
 
 On Linux, audio and video rely on the system's GStreamer plug-ins. Use `linux.depends` and `linux.recommends` to declare the codecs your app needs. [Building](https://nsgo.dev/docs/building.md).

@@ -154,8 +154,7 @@ func signMacApp(ctx context.Context, p *project, app string) error {
 	}
 	detailIn(ctx, "sign with %s", p.Sign.Identity)
 	stage(ctx, "signing")
-	libs, _ := filepath.Glob(filepath.Join(app, "Contents", "Frameworks", "*.dylib"))
-	for _, lib := range libs {
+	for _, lib := range macFrameworkLibraries(app) {
 		if err := run(ctx, "codesign", p.macSignArgs(lib)...); err != nil {
 			return err
 		}
