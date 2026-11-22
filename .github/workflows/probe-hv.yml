@@ -1,0 +1,23 @@
+name: Probe macOS hypervisor
+on:
+  push:
+    branches: [ci/probe-depot-macos-hv]
+permissions: {}
+jobs:
+  probe:
+    runs-on: depot-macos-15
+    timeout-minutes: 15
+    steps:
+      - run: |
+          uname -m; sw_vers; sysctl -n machdep.cpu.brand_string
+          echo "kern.hv_support=$(sysctl -n kern.hv_support 2>&1)"
+          sysctl -a 2>/dev/null | grep -iE 'hv_vmm_present|kern.hv' || true
+          echo "ANDROID_HOME=$ANDROID_HOME ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          sdk="${ANDROID_HOME:-$ANDROID_SDK_ROOT}"
+          if [ -z "$sdk" ] || [ ! -x "$sdk/cmdline-tools/latest/bin/sdkmanager" ]; then
+            sdk="$HOME/android-sdk"; mkdir -p "$sdk/cmdline-tools"
+            curl -fsSL -o /tmp/clt.zip https://dl.google.com/android/repository/commandlinetools-mac-13114758_latest.zip
+            unzip -q /tmp/clt.zip -d "$sdk/cmdline-tools" && mv "$sdk/cmdline-tools/cmdline-tools" "$sdk/cmdline-tools/latest"
+          fi
+          yes | "$sdk/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$sdk" emulator >/dev/null 2>&1 || echo "sdkmanager emulator install failed"
+          "$sdk/emulator/emulator" -accel-check; echo "accel-check exit $?"
