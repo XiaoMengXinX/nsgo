@@ -337,6 +337,38 @@ func TestReadEnvironmentSetsCanRequestReview(t *testing.T) {
 	}
 }
 
+// TestReadEnvironmentSeparatesSpeechFromAudio: NsgoView writes text to speech as bit 1 and audio playback as bit 16 of the capability byte, so a device without a speech engine still plays sounds and a speaking one does not claim audio by itself.
+func TestReadEnvironmentSeparatesSpeechFromAudio(t *testing.T) {
+	for _, c := range []struct {
+		more         byte
+		speak, audio bool
+	}{
+		{0, false, false},
+		{1, true, false},
+		{16, false, true},
+		{17, true, true},
+	} {
+		var w writer
+		for range 7 {
+			w.float(1)
+		}
+		w.byte(0) // flags
+		w.byte(c.more)
+		w.byte(byte(driver.IdiomPhone))
+		w.str("en-US")
+		w.str("Pixel")
+		w.str("Google Pixel 9")
+		w.float(56) // HeaderHeight
+		w.float(96) // LargeHeaderHeight
+		w.u32(35)   // API level
+
+		env := readEnvironment(&reader{w.buf})
+		if env.Speak != c.speak || env.Audio != c.audio || env.AudioPlaybackControls != c.audio {
+			t.Errorf("readEnvironment with capability byte %d: Speak %v, Audio %v, AudioPlaybackControls %v; want %v, %v, %v", c.more, env.Speak, env.Audio, env.AudioPlaybackControls, c.speak, c.audio, c.audio)
+		}
+	}
+}
+
 // TestReadEnvironmentMapsPowerState: NsgoView writes PowerManager's thermal status plus one, 0 before API 29, and the power-save mode as 0 unknown, 1 off or 2 on.
 func TestReadEnvironmentMapsPowerState(t *testing.T) {
 	for _, c := range []struct {
