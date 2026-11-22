@@ -115,15 +115,18 @@ func TestWebAudioSounds(t *testing.T) {
 		t.Fatalf("sound beyond the duration limit: %+v", e)
 	}
 
-	a.play(1, 1, 1, 0, time.Time{})
+	a.play(1, &driver.AudioRequest{Volume: 1, Rate: 1, Playback: 900})
 	if a.output.Truthy() || len(a.voices) != 0 {
 		t.Fatal("sound opened the playback output before a gesture")
+	}
+	if e := reports[1]; e.Phase != driver.AudioPlaybackEnded || e.Playback != 900 {
+		t.Fatalf("a blocked playback stayed active: %+v", e)
 	}
 	var started time.Time
 	var analyser js.Value
 	pressAudio(t, doc, a, func() {
 		started = time.Now()
-		a.play(1, 0.8, 1, 0, time.Time{})
+		a.play(1, &driver.AudioRequest{Volume: 0.8, Rate: 1})
 		if len(a.voices) == 1 {
 			analyser = a.output.Call("createAnalyser")
 			analyser.Set("fftSize", 256)
@@ -147,10 +150,10 @@ func TestWebAudioSounds(t *testing.T) {
 	analyser.Call("disconnect")
 	a.stop(1)
 
-	a.play(2, 1, 1, 0, time.Time{})
+	a.play(2, &driver.AudioRequest{Volume: 1, Rate: 1, Playback: 901})
 	oldest := a.voices[0]
 	for range driver.MaxSoundVoices {
-		a.play(1, 0.5, 1.2, -0.5, time.Time{})
+		a.play(1, &driver.AudioRequest{Volume: 0.5, Rate: 1.2, Pan: -0.5})
 	}
 	if panner := a.voices[len(a.voices)-1].panner; !panner.Truthy() || math.Abs(panner.Get("pan").Get("value").Float()+0.5) > 1e-6 {
 		t.Fatal("a panned voice played without its stereo panner")
@@ -158,7 +161,10 @@ func TestWebAudioSounds(t *testing.T) {
 	if len(a.voices) != driver.MaxSoundVoices || a.voices[0] == oldest {
 		t.Fatal("the oldest voice survived the overlap limit")
 	}
-	a.play(2, 1, 1, 0, time.Time{})
+	if e := reports[2]; e.Phase != driver.AudioPlaybackEnded || e.Playback != 901 {
+		t.Fatalf("the evicted playback stayed active: %+v", e)
+	}
+	a.play(2, &driver.AudioRequest{Volume: 1, Rate: 1, Playback: 901})
 	a.stop(1)
 	if len(a.voices) != 1 || a.voices[0].sound != 2 {
 		t.Fatal("stopping one sound interrupted a different sound")
@@ -229,11 +235,11 @@ func TestWebAudioSchedulesStarts(t *testing.T) {
 	defer process.Release()
 	tap.Set("onaudioprocess", process)
 	first := time.Now().Add(300 * time.Millisecond)
-	a.play(2, 1, 1, 0, first)
+	a.play(2, &driver.AudioRequest{Volume: 1, Rate: 1, StartAt: first})
 	a.voices[len(a.voices)-1].gain.Call("connect", tap)
 	// The second voice is scheduled in a later turn, after the context's clock moved on.
 	time.Sleep(70 * time.Millisecond)
-	a.play(2, 1, 1, 0, first.Add(500*time.Millisecond))
+	a.play(2, &driver.AudioRequest{Volume: 1, Rate: 1, StartAt: first.Add(500 * time.Millisecond)})
 	a.voices[len(a.voices)-1].gain.Call("connect", tap)
 	audioWait(t, "two scheduled starts", func() bool { return len(onsets) >= 2 })
 	if gap := onsets[1] - onsets[0]; math.Abs(gap-0.5) > 0.001 {
@@ -329,9 +335,12 @@ func TestWebAudioThroughApp(t *testing.T) {
 	defer mount.Call("remove")
 
 	var sound *core.Sound
+	var playback *core.Playback
+	var scope *core.Scope
 	var loadErr, playErr error
 	var loadedPlayer, played bool
 	s := open(func(cx *core.Scope) core.Node {
+		scope = cx
 		wav := audioWAV(2 * time.Second)
 		cx.LoadSound(core.AudioSource{Data: wav}, func(loaded *core.Sound, err error) {
 			sound, loadErr = loaded, err
@@ -344,7 +353,10 @@ func TestWebAudioThroughApp(t *testing.T) {
 			Style: core.Style{Width: core.Pt(100), Height: core.Pt(100)},
 			OnPress: func(core.PressEvent) {
 				if sound != nil {
-					sound.Play(core.SoundVoice{})
+					first := sound.Play(core.SoundVoice{Muted: true})
+					playback = sound.Play(core.SoundVoice{Muted: true})
+					playback.SetRate(2)
+					first.Stop()
 				}
 				player.Play(func(err error) { played, playErr = true, err })
 			},
@@ -362,6 +374,24 @@ func TestWebAudioThroughApp(t *testing.T) {
 	audioWait(t, "the app's audio to start", func() bool { return len(s.audio.voices) == 1 && played })
 	if playErr != nil {
 		t.Fatal(playErr)
+	}
+	if playback == nil || playback.Ended() {
+		t.Fatal("the app's independent sound playback did not stay active")
+	}
+	voice := s.audio.voices[0]
+	if voice.gain.Get("gain").Get("value").Float() != 0 || voice.source.Get("playbackRate").Get("value").Float() != 2 {
+		t.Fatal("the muted playback did not keep its live rate")
+	}
+	scope.Post(func() {
+		playback.SetVolume(0.25)
+		playback.SetRate(1)
+	})
+	audioWait(t, "live playback controls", func() bool {
+		return voice.gain.Get("gain").Get("value").Float() == 0.25 && voice.source.Get("playbackRate").Get("value").Float() == 1
+	})
+	audioWait(t, "the app's playback completion", playback.Ended)
+	if len(s.audio.voices) != 0 {
+		t.Fatal("a completed playback kept its audio nodes")
 	}
 	a := s.audio
 	js.Global().Call("dispatchEvent", js.Global().Get("PageTransitionEvent").New("pagehide"))
