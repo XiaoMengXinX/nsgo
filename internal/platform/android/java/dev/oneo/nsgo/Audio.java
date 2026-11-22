@@ -22,6 +22,9 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.function.Consumer;
 
+import org.json.JSONException;
+import org.json.JSONObject;
+
 /** One engine's SoundPool and players. Sound commands use the UI thread and players own a media looper. */
 final class Audio {
     // The driver's AudioCommand.
@@ -401,6 +404,12 @@ final class Audio {
             playerThread.quitSafely();
             media = null;
         }
+    }
+
+    /** What this holds, for the test agent on the UI thread: the SoundPool and the loaders come with the first sound, the media looper that makes MediaPlayers with the first opened player. */
+    JSONObject testState() throws JSONException {
+        return new JSONObject().put("audio", true).put("pool", pool != null)
+                .put("loaders", inspectors != null).put("players", media != null);
     }
 
     void failure(int owner, int id, String code, String message) {

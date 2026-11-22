@@ -1888,6 +1888,11 @@ public class NsgoView extends FrameLayout implements NsgoEngine.Listener {
         }
     }
 
+    /** The engine's sounds and players, which the first view holds for its overlays too: null until the engine sends its first audio command. */
+    Audio sharedAudio() {
+        return (primary == null ? this : primary).audio;
+    }
+
     /** Answers the test step id: an error, else the step's data. */
     void testReply(int id, String error, String data) {
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();

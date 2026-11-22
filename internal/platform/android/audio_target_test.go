@@ -6,6 +6,7 @@ import (
 	_ "embed"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/nsgo-dev/nsgo/core"
 	"github.com/nsgo-dev/nsgo/internal/driver"
+	"github.com/nsgo-dev/nsgo/internal/testhost"
 	"github.com/nsgo-dev/nsgo/nsgotest"
 )
 
@@ -313,4 +315,85 @@ looped:
 		t.Fatalf("unsupported player format: %v", err)
 	}
 	step(p.Close)
+}
+
+// runtimeAudio is what the runtime holds for the engine's audio, as its test agent reports it.
+type runtimeAudio struct {
+	Audio   bool // the engine sent an audio command
+	Pool    bool // a SoundPool, which plays through its own AudioTracks
+	Loaders bool // the threads that inspect a sound's source
+	Players bool // the media looper that makes MediaPlayers
+}
+
+func runtimeAudioState(t *testing.T, s *testSurface) runtimeAudio {
+	t.Helper()
+	data, err := s.ask(map[string]any{"op": "audio"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state runtimeAudio
+	if err := json.Unmarshal([]byte(data), &state); err != nil {
+		t.Fatalf("%q: %v", data, err)
+	}
+	return state
+}
+
+// An app that never loads a sound or plays a player makes no SoundPool, MediaPlayer or the threads that serve them: asking whether it can play audio, and making a player it never plays, cost nothing. The first sound then makes the pool, and the first player that loads the media looper.
+func TestNativeAndroidAudioStartsLazily(t *testing.T) {
+	if nsgotest.Target() != "android" {
+		t.Skip("requires Android audio")
+	}
+	var cx *core.Scope
+	surface, err := testhost.Current().Open(func(scope *core.Scope) core.Node {
+		cx = scope
+		return core.View{}
+	}, testhost.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := surface.(*testSurface)
+	s.Sync()
+	step := func(fn func()) {
+		cx.Post(fn)
+		s.Sync()
+	}
+	var available bool
+	step(func() { available = core.Untracked(cx, cx.Env().CanPlayAudio) })
+	if !available {
+		t.Fatal("the Android runtime did not report audio")
+	}
+	var player *core.AudioPlayer
+	step(func() {
+		player = cx.NewAudioPlayer(core.AudioSource{Data: silentAudioWAV(200 * time.Millisecond)}, core.AudioPlayerOptions{})
+	})
+	if got := runtimeAudioState(t, s); got != (runtimeAudio{}) {
+		t.Fatalf("an app that loaded no sound and played no player holds %+v", got)
+	}
+
+	// The probe sees what a sound and a player make, so the idle answer above is not vacuous.
+	type loadResult struct {
+		sound *core.Sound
+		err   error
+	}
+	loaded := make(chan loadResult, 1)
+	step(func() {
+		cx.LoadSound(core.AudioSource{Data: silentAudioWAV(200 * time.Millisecond)}, func(sound *core.Sound, err error) {
+			loaded <- loadResult{sound, err}
+		})
+	})
+	got := awaitAudio(t, loaded)
+	if got.err != nil {
+		t.Fatal(got.err)
+	}
+	if state := runtimeAudioState(t, s); state != (runtimeAudio{Audio: true, Pool: true, Loaders: true}) {
+		t.Fatalf("after loading a sound the runtime holds %+v", state)
+	}
+	step(player.Preload)
+	if state := runtimeAudioState(t, s); !state.Players {
+		t.Fatalf("after preloading a player the runtime holds %+v", state)
+	}
+	step(func() {
+		player.Close()
+		got.sound.Close()
+	})
 }

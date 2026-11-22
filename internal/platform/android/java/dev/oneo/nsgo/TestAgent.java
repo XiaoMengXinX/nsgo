@@ -242,6 +242,11 @@ final class TestAgent {
                         .put("count", view.canvasImages.size())
                         .put("ready", view.canvasImages.ready(op.getString("key"))).toString());
                 return;
+            case "audio": {
+                Audio audio = view.sharedAudio();
+                view.testReply(id, "", (audio == null ? new JSONObject().put("audio", false) : audio.testState()).toString());
+                return;
+            }
             default:
                 throw new IllegalArgumentException("unknown step " + op);
         }
