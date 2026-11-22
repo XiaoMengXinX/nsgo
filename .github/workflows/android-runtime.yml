@@ -28,7 +28,7 @@ env:
 jobs:
   rebuild:
     name: Rebuild and propose
-    runs-on: ubuntu-24.04
+    runs-on: depot-ubuntu-24.04
     timeout-minutes: 20
     steps:
       - name: Check for the App's secrets
