@@ -62,7 +62,7 @@ func (m *soundMixer) updateVoice(index int, volume, rate float32) {
 	voice := &m.voices[index]
 	// The mixer applies pad volume to each output block. An upstream
 	// volume element would have processed the queued PCM already.
-	setSoundVolume(voice.volume, volume)
+	setSoundVolume(voice.pad, volume)
 	voice.play.volume = volume
 	if voice.play.rate == rate {
 		return
