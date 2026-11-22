@@ -78,6 +78,24 @@ func (a *App) DragAt(selector string, at driver.Point, path ...driver.Point) {
 	a.drag(v, v.pagePoint(at), path)
 }
 
+// DragTo drags from the middle of what from names to the middle of what to
+// names, stepping across the drag threshold so a DragSource activates and a
+// DropTarget receives enter, over, and drop events as the pointer moves and
+// lifts.
+func (a *App) DragTo(from, to string) {
+	a.t.Helper()
+	a.step("dragTo(%s, %s)", from, to)
+	src := a.pick(from, "view", func(m *View) (*View, bool) { return m, true })
+	dst := a.pick(to, "view", func(m *View) (*View, bool) { return m, true })
+	_, start := src.center()
+	_, end := dst.center()
+	if a.target != nil {
+		start = a.target.reveal(src)
+		end = a.target.reveal(dst)
+	}
+	a.drag(src, start, []driver.Point{{X: end.X - start.X, Y: end.Y - start.Y}})
+}
+
 // drag puts a finger on v at the surface point start and moves it
 // through path, offsets from start.
 func (a *App) drag(v *View, start driver.Point, path []driver.Point) {
@@ -176,6 +194,19 @@ func (g *Finger) Move(at driver.Point) {
 	g.a.step("move(%v)", at)
 	g.a.frame(g.f)
 	g.a.fingerMoved(g.f, g.pagePoint(at))
+	g.a.done()
+}
+
+// MoveTo moves the finger to the middle of what selector names, a display
+// frame later, for stepping an active drag across drop targets or inspecting
+// floating previews before lifting or cancelling.
+func (g *Finger) MoveTo(selector string) {
+	g.a.t.Helper()
+	g.a.step("moveTo(%s)", selector)
+	v := g.a.pick(selector, "view", func(m *View) (*View, bool) { return m, true })
+	_, end := v.center()
+	g.a.frame(g.f)
+	g.a.fingerMoved(g.f, end)
 	g.a.done()
 }
 

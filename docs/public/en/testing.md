@@ -44,7 +44,7 @@ A surface's `Press`, `Type`, `Key`, `Find` and `Query` act in its own window whi
 
 `app.Menu`, `app.DockMenu` and `app.PopupMenu` expose `nsgotest.MenuItem` snapshots with labels, roles, check state and nested items. Use the corresponding choose step with a path of labels to invoke an item.
 
-`Drag` cancels the press under the pointer once it moves more than 8 points from where it went down. The same rule applies to the web, so a drag that returns to its starting view does not fire `OnPress`.
+`Drag` cancels the press under the pointer once it moves more than 8 points from where it went down. The same rule applies to the web, so a drag that returns to its starting view does not fire `OnPress`. `app.DragTo(from, to)` drags from the middle of one view to the middle of another across the drag threshold so `core.DragSource` and `core.DropTarget` views exercise enter, over, leave, and drop; for step-by-step inspection of floating previews or Escape cancellation mid-drag, start with `app.Touch` and move with `Finger.MoveTo`.
 
 `app.KeyCommands()` lists the titled keyboard shortcuts that can fire with the current focus and visible views. It reports the key, title and group headless and on a target.
 

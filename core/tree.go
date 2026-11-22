@@ -48,6 +48,7 @@ type Tree struct {
 	free      []NodeID
 	view      *node // the surface's root view
 	touches   touchState
+	drag      dragState
 	size      Size
 	changed   bool
 	deleted   []NodeID // retired nodes kept for command cancellation, created or not
@@ -253,9 +254,12 @@ type node struct {
 	children []*node
 	owner    *Scope
 
-	responder *Responder // a view's part in the touch responder
-	follow    *following // what its frame follows (View.Follow)
-	match     string     // View.MatchID
+	responder   *Responder  // a view's part in the touch responder
+	drag        *DragSource // a view's internal drag source (View.Drag)
+	drop        *DropTarget // a view's internal drop target (View.Drop)
+	dragPreview bool        // synthetic region holding an active drag preview
+	follow      *following  // what its frame follows (View.Follow)
+	match       string      // View.MatchID
 	// tip is the tooltip's: what shows it as the pointer comes onto the
 	// view or the keyboard's focus into it, and hides it.
 	tip *tooltipHooks
@@ -1105,6 +1109,7 @@ func (t *Tree) discard(n *node) {
 		return
 	}
 	n.deleted = true
+	t.dragNodeDiscarded(n)
 	if n.ink != nil {
 		delete(n.ink.nodes, n)
 	}
@@ -1835,6 +1840,8 @@ func (t *Tree) setViewParts(n *node, v View) {
 		focus: v.OnFocus, blur: v.OnBlur, keyDown: v.OnKeyDown, keyUp: v.OnKeyUp, transitionEnd: v.OnTransitionEnd}
 	n.h.action = v.OnAccessibilityAction
 	n.responder = v.Responder
+	n.drag = v.Drag
+	n.drop = v.Drop
 	n.match = v.MatchID
 	n.props = driver.ViewProps{Role: v.Role, Label: v.Label, Hint: v.Hint, Description: v.AccessibilityDescription,
 		LiveRegion: liveRegion(v.Role, v.LiveRegion), TestID: v.TestID, MultiSelectable: v.MultiSelectable, WindowDrag: v.Desktop.WindowDrag, SelectionArea: v.Selectable, PointerEvents: v.PointerEvents, HitSlop: v.HitSlop,
@@ -2314,6 +2321,9 @@ func (t *Tree) Dispatch(ev driver.Event) {
 		t.inputModality(ev.Count)
 		return
 	case driver.EventBack:
+		if t.cancelDrag() {
+			return
+		}
 		n := t.node(ev.ID)
 		// Escape on a view of an overlay is that overlay's, a confined owner's only while the focus is within it.
 		var overlay *node
@@ -2462,6 +2472,9 @@ func (t *Tree) Dispatch(ev driver.Event) {
 	switch ev.Kind {
 	case driver.EventPress:
 		t.setState(n, statePressed, false)
+		if t.modality != driver.ModalityKeyboard && t.suppressDragPress(n) {
+			break
+		}
 		if n.labelProps().Disabled {
 			break
 		}
@@ -2479,6 +2492,9 @@ func (t *Tree) Dispatch(ev driver.Event) {
 		press(h.press)
 		t.pressLabel(n, ev)
 	case driver.EventLongPress:
+		if t.drag.active != nil {
+			break
+		}
 		if n.labelProps().Disabled {
 			break
 		}
@@ -2494,6 +2510,7 @@ func (t *Tree) Dispatch(ev driver.Event) {
 			t.within(n.owner, func() { h.action(ev.Text) })
 		}
 	case driver.EventPressDown:
+		t.clearDragSuppress()
 		t.setState(n, statePressed, !n.labelProps().Disabled)
 		press(h.pressDown)
 		if n.tip != nil {

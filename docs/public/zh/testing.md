@@ -44,7 +44,7 @@ func TestMain(m *testing.M) {
 
 界面的 `Press`、`Type`、`Key`、`Find` 和 `Query` 在对应窗口执行，步骤会等待整个应用完成更新。`Config` 返回打开时的 `nsgotest.SurfaceConfig`，`app.Opened` 也记录了这份配置。`Screenshot` 在原生目标上截取该界面。`Close` 通过 `OnClosing` 请求关闭窗口，并返回窗口是否关闭。已关闭的句柄会使后续步骤失败，并从列表中移除。这些步骤适用于无头测试和 macOS、Windows、Linux 测试宿主。单界面的目标只列出主界面。
 
-`Drag` 在指针从按下位置移动超过 8 点后会取消指针下的按压。Web 也遵循此规则，因此拖动回到原来的视图不会触发 `OnPress`。
+`Drag` 在指针从按下位置移动超过 8 点后会取消指针下的按压。Web 也遵循此规则，因此拖动回到原来的视图不会触发 `OnPress`。`app.DragTo(from, to)` 会从一个视图中心跨过拖拽阈值拖到另一个视图中心并抬起，以测试 `core.DragSource` 和 `core.DropTarget` 的进入、悬停、离开与放置；若需在拖拽中途检查浮动预览或按 Escape 取消，可用 `app.Touch` 搭配 `Finger.MoveTo` 分步推进。
 
 `app.KeyCommands()` 列出当前焦点和可见视图下生效的带标题快捷键。在无界面测试和目标平台测试中，它都会返回按键、标题和分组。
 

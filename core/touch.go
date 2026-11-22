@@ -194,7 +194,7 @@ type touchState struct {
 
 // hearsTouches reports whether n listens to touches.
 func (n *node) hearsTouches() bool {
-	return n.h.touch != nil || n.h.touchCapture != nil || n.responder != nil || n.tip != nil
+	return n.h.touch != nil || n.h.touchCapture != nil || n.responder != nil || n.tip != nil || n.drag != nil
 }
 
 // alive reports whether n is still mounted.
@@ -220,6 +220,7 @@ func (t *Tree) touched(ev driver.Event) {
 	e := TouchEvent{Phase: touchPhase(ev.Phase), Time: ev.Time, Touches: ev.Touches, geometry: ev.TouchGeometry}
 	lifted := e.Phase == TouchEnd || e.Phase == TouchCancel
 	if e.Phase == TouchStart {
+		t.clearDragSuppress()
 		if s.paths == nil {
 			s.paths = map[int][]*node{}
 		}
@@ -263,7 +264,7 @@ func (t *Tree) touched(ev driver.Event) {
 	s.last, s.about = e, about
 	path := s.paths[about.ID]
 	defer t.forgetLifted(&e)
-	if len(path) == 0 && s.responder == nil {
+	if len(path) == 0 && s.responder == nil && t.drag.active == nil && t.drag.pending == nil {
 		return
 	}
 	if len(path) > 0 && (e.Phase == TouchStart || e.Phase == TouchEnd) {
@@ -293,12 +294,15 @@ func (t *Tree) touched(ev driver.Event) {
 	for _, n := range path {
 		hear(n, n.h.touch)
 	}
-	switch e.Phase {
-	case TouchStart:
-		t.negotiate(false, path, about, &e)
-	case TouchMove:
-		t.negotiate(true, path, about, &e)
+	if t.drag.active == nil {
+		switch e.Phase {
+		case TouchStart:
+			t.negotiate(false, path, about, &e)
+		case TouchMove:
+			t.negotiate(true, path, about, &e)
+		}
 	}
+	t.dragTouch(&e, path, about)
 	r := s.responder
 	if r == nil {
 		return

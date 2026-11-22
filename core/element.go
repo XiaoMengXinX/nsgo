@@ -160,6 +160,17 @@ type View struct {
 	OnFileDrop      func(uris []string)
 	OnFileDragEnter func()
 	OnFileDragLeave func()
+	// Drag makes the view a drag source for internal drag and drop within the
+	// surface. Once the pointer moves past Drag.Threshold (DefaultDragThreshold
+	// when <= 0), a drag begins carrying its value with a floating preview; a
+	// shorter movement still presses the view. Pair it with a keyboard shortcut,
+	// menu, or AccessibilityActions so keyboard and assistive technology users
+	// can perform the same move.
+	Drag *DragSource
+	// Drop makes the view a drop target for internal drags from DragSource views
+	// in the same surface. When a drag moves over the view and Drop.Accept allows
+	// it, the view hears OnEnter, OnOver, OnLeave, and OnDrop.
+	Drop *DropTarget
 	// IOS, Android and Desktop hold the props only iOS, Android or the
 	// desktops have; other platforms ignore them.
 	IOS     IOSViewProps
