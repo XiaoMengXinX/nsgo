@@ -1,6 +1,6 @@
 # Audio playback
 
-NSGo ports NSH 0.5.0's audio design (`nsh/docs/dev/audio-design.md`) for issue #36. The `audio` package uses `Sound` for short sounds and `Player` for long audio. macOS, iOS, Linux, Android and the web have backends, and `nsgotest` provides a fake. The [roadmap](../roadmap.md#services-and-components-since-040) tracks the remaining backends. Read both designs before extending audio.
+NSGo ports NSH 0.5.0's audio design (`nsh/docs/dev/audio-design.md`) for issue #36. The `audio` package uses `Sound` for short sounds and `Player` for long audio. macOS, iOS, Windows, Linux, Android and the web have backends, and `nsgotest` provides a fake. The [roadmap](../roadmap.md#services-and-components-since-040) tracks the remaining backends. Read both designs before extending audio.
 
 ## The API
 
@@ -34,7 +34,7 @@ A `Source` is what an image's is: an `asset:` path in the app's resources, a fil
 
 - `LoadSound` has the platform read and decode the source into memory once, and calls back with the sound or why not. Loading a source this engine already holds in the same surface (the same URI, or bytes of the same digest) shares the decoded buffer, which goes with the last `Sound` over it. Sharing stops at a surface, a window or an embedded view, because a surface's audio goes as it closes while the commands of a sound go to the surface that loaded it.
 - `Play(Voice)` starts a playback within a frame: it is a command in the batch of the turn that calls it, so nothing is opened, fetched or decoded then. Playbacks overlap. `Volume` runs from 0 to 1 and `Rate` from 0.5 to 2, with 0 as 1 for both, as `Video`'s; `Pan` runs from -1 (full left) to 1 (full right), with 0 centered. Values outside those ranges are clamped, where NSH throws a `RangeError`, and NaN takes the default. A playback that cannot be heard, the device muted or a voice dropped past the limit, is no error.
-- `Play` returns an `audio.Playback`. Its `SetVolume` takes zero as silence, `SetRate` changes speed in place, `Stop` stops it alone, and tracked `Ended` follows completion, stop, eviction and failure. `Voice.Muted` starts it at zero volume. macOS, iOS, Linux and the web support playback controls. A backend without them still plays fire-and-forget and returns an ended handle.
+- `Play` returns an `audio.Playback`. Its `SetVolume` takes zero as silence, `SetRate` changes speed in place, `Stop` stops it alone, and tracked `Ended` follows completion, stop, eviction and failure. `Voice.Muted` starts it at zero volume. macOS, iOS, Linux, Android and the web support playback controls. Android and the other backends now support playback controls; a backend without them still plays fire-and-forget and returns an ended handle.
 - `Stop` stops every playback of the sound, `Duration` is the decoded length, and `Close` frees the buffer. The owner that loaded the sound closes it as it goes, and the engine as it closes.
 
 `Player` is NSH's `AudioPlayer`, `Video` without a picture:

@@ -19,6 +19,7 @@ import (
 func writeAudio(w *writer, id uint32, r *driver.AudioRequest) {
 	w.u32(id)
 	w.byte(byte(r.Command))
+	w.u32(r.Playback)
 	switch r.Command {
 	case driver.AudioLoad:
 		writeAudioSource(w, r.Source)
@@ -30,6 +31,10 @@ func writeAudio(w *writer, id uint32, r *driver.AudioRequest) {
 		w.float(r.Volume * left)
 		w.float(r.Volume * right)
 		w.float(r.Rate)
+	case driver.AudioPlaybackSet:
+		w.float(r.Volume)
+		w.float(r.Rate)
+	case driver.AudioPlaybackStop:
 	case driver.AudioOpen:
 		writeAudioSource(w, r.Source)
 		w.float(r.Volume)
@@ -193,6 +198,7 @@ func (f *audioFiles) remove(key audioKey, file *audioFile) {
 func (s *surface) audioReport(r *reader) {
 	key := audioKey{r.u32(), r.u32()}
 	report := &driver.AudioEvent{
+		Playback:  r.u32(),
 		Phase:     driver.AudioPhase(r.byte()),
 		Duration:  time.Duration(r.u64()) * time.Microsecond,
 		Position:  time.Duration(r.u64()) * time.Microsecond,
