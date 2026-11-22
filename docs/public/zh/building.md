@@ -222,7 +222,7 @@ sign:
 
 在 macOS 和 iOS 上，滚动视图的边缘效果（`Scroll.EdgeEffects`）、macOS 上没有指定 `IOS.BackdropMaterial` 的背景模糊 `Blur`，以及背景颜色滤镜（单独使用，或与没有指定 `IOS.BackdropMaterial` 的模糊组合使用）像 AppKit 和 UIKit 自己的材质与边缘效果一样，通过 Core Animation 的私有 `CABackdropLayer` 和 `CAFilter` 绘制，因为没有公开 API 能按半径模糊、让模糊程度在视图上渐变或对背景应用颜色矩阵。App Store 审核可能拒绝使用私有 API 的应用：NSGo 只在带边缘栏的滚动视图和这些背景滤镜中调用它们，但每个 macOS 和 iOS 构建都包含它们的名称。
 
-`build` 写出的每个 Apple 包，即应用、它的小组件扩展、App Clip 和 Apple Watch 应用，以及 `-dynamic` 的 `-embed` 框架，都带有隐私清单 `PrivacyInfo.xcprivacy`，声明 NSGo 和 Go 运行时用到的需要理由的 API：用户默认设置（`CA92.1`）、文件时间戳（`C617.1`）和系统启动时间（`35F9.1`）。`apple.privacy` 添加应用自己的声明：`accessed_apis` 给出每个类别的理由，另有 `tracking`、`tracking_domains` 和 `collected_data`，后者的条目按 Apple 的命名写成 `NSPrivacyCollectedDataTypes` 的条目；`resources/` 中的 `PrivacyInfo.xcprivacy` 会与这些声明合并，而不是被替换。
+`build` 写出的每个 Apple 包，即应用、它的小组件扩展、分享扩展、App Clip 和 Apple Watch 应用，以及 `-dynamic` 的 `-embed` 框架，都带有隐私清单 `PrivacyInfo.xcprivacy`，声明 NSGo 和 Go 运行时用到的需要理由的 API：用户默认设置（`CA92.1`）、文件时间戳（`C617.1`）和系统启动时间（`35F9.1`）。`apple.privacy` 添加应用自己的声明：`accessed_apis` 给出每个类别的理由，另有 `tracking`、`tracking_domains` 和 `collected_data`，后者的条目按 Apple 的命名写成 `NSPrivacyCollectedDataTypes` 的条目；`resources/` 中的 `PrivacyInfo.xcprivacy` 会与这些声明合并，而不是被替换。
 
 iOS、tvOS 和 watchOS 的设备构建会在应用及其扩展中写入 App Store Connect 检查的 SDK 与 Xcode 元数据，并加入 `UIRequiredDeviceCapabilities: [arm64]`。模拟器构建不会写入这些仅设备条目；`apple.info` 中显式设置的值优先。`apple.multiple_scenes: true` 会在 iOS 应用的场景清单中将 `UIApplicationSupportsMultipleScenes` 设为 true，默认值为 false：此后用户可以在 iPad 上打开 App 的多个窗口，每个窗口都重新显示 App 的主视图，拥有各自的状态，同时共享 App 的信号和存储，直到用户关闭该窗口。
 
@@ -465,6 +465,22 @@ android:
 
 APK 和 App Bundle 都会为单项和多项分享注册这些类型。用 [`mobile.OnShared`](services.md#打开链接与文件) 接收每次分享。
 
+## 接收 iOS 分享
+
+用 UTI 声明分享扩展接收的类型，将网址和文本放在宽泛的文件类型之前：
+
+```yaml
+apple:
+  share_types: [public.url, public.plain-text, public.image, com.adobe.pdf]
+  # app_group: group.com.example.app  # 默认为 group.<id>
+sign:
+  # share_profile: assets/Share.mobileprovision
+```
+
+工具将 Go 实现的 `<id>.share` 扩展打包进应用。真机运行时由 Xcode 为应用和扩展签名并注册 App Group；构建 IPA 时，`sign.profile` 与 `sign.share_profile` 必须为两者授予同一个 App Group。App Clip、tvOS 和 watchOS 不包含分享扩展。
+
+扩展把每批最多 128 项、512 MiB 的文件复制到 App Group 后结束分享。`mobile.OnShared` 在应用处于活动状态或用户下次打开时接收这些批次；在交付之前，应用或扩展退出不会丢失批次。iOS 没有支持 Share 扩展自动启动或切到主应用的公开 API，因此此流程不会自动打开应用。
+
 ## 小程序
 
 ```sh
@@ -524,7 +540,7 @@ sign:
   # clip_profile: assets/Clip.mobileprovision        # 为 IPA 中的轻 App 签名
 ```
 
-密钥库的密码来自 `NSGO_KEYSTORE_PASSWORD` 和 `NSGO_KEY_PASSWORD`。`-team` 用于为 iPhone 包签名。命令行可用 `-profile`、`-widgets-profile`、`-clip-profile` 和 `-macos-profile` 替换应用、小组件扩展、轻 App 和 Mac App Store 的描述文件，`-installer` 替换 Mac Installer Distribution 身份。
+密钥库的密码来自 `NSGO_KEYSTORE_PASSWORD` 和 `NSGO_KEY_PASSWORD`。`-team` 用于为 iPhone 包签名。命令行可用 `-profile`、`-widgets-profile`、`-share-profile`、`-clip-profile` 和 `-macos-profile` 替换应用、小组件扩展、分享扩展、轻 App 和 Mac App Store 的描述文件，`-installer` 替换 Mac Installer Distribution 身份。
 
 ### 为 Windows 包签名
 

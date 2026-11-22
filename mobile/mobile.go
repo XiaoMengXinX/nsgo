@@ -110,6 +110,8 @@ type SharedItem = core.SharedItem
 // OnShared calls fn for each share the system delivers while cx lives.
 // Shares that launch the app wait for its first handler. On Android,
 // nsgo.yaml's android.share_types declares which media types the app receives.
+// On iOS apple.share_types declares UTIs; the share extension queues items in
+// the App Group until the containing app is active or next opened normally.
 func OnShared(cx *core.Scope, fn func(items []SharedItem)) { cx.OnShared(fn) }
 
 // ExitApp leaves the app on Android as its back button does when nothing

@@ -31,13 +31,8 @@ var layers = []struct {
 	// through the files and the library the tool's extension shares, and
 	// Android's runtime through the driver's Live Updates.
 	{"widget", []string{"core", "internal/driver"}},
-	// Platform game services reach GameKit through purego and objcblock on Apple platforms, Android's runtime through the driver's game services channel, and nsgotest's per-app fake through core.
-	{"gameservices", []string{"core", "internal/driver", "internal/platform/objcblock"}},
-	// Cloud storage reaches Apple's Foundation/iCloud APIs through purego and objcblock, Android's Play Games runtime bridge through internal/driver, and nsgotest's isolated in-memory store through core.Scope.CloudStore.
-	{"cloud", []string{"core", "internal/driver", "internal/platform/objcblock"}},
 	{"internal/woff", nil},
 	{"internal/mimeinfo", nil},
-	{"internal/appstartup", nil},
 	{"internal/cldr/", nil},
 	{"internal/cldr", nil},
 	{"internal/driver", []string{"internal/mimeinfo", "internal/shaderir"}},
@@ -48,12 +43,9 @@ var layers = []struct {
 	{"internal/shader", []string{"internal/shaderir"}},
 	{"internal/shader/wgsl", []string{"internal/shaderir"}},
 	{"core", []string{"internal/crashreport", "internal/devtools", "internal/driver", "internal/layout", "internal/shader", "internal/shader/wgsl", "internal/shaderir"}},
-	{"automation", []string{"core"}},
 	{"internal/engine", []string{"core", "internal/driver", "internal/testhost"}},
 	{"internal/testhost", []string{"core", "internal/driver"}},
 	{"internal/platform/android/runtime", nil},
-	{"internal/platform/applelog", nil},
-	{"internal/platform/authscheme", []string{"internal/driver"}},
 	{"internal/platform/apple", append([]string{"internal/driver"}, platformShared...)},
 	{"internal/platform/canvas2d", []string{"internal/driver", "internal/platform/canvasmesh", "internal/platform/webstyle"}},
 	{"internal/platform/canvasmesh", []string{"internal/driver"}},
@@ -66,10 +58,8 @@ var layers = []struct {
 	{"internal/platform/imagedecode", []string{"internal/driver"}},
 	{"internal/platform/imageload", []string{"internal/driver"}},
 	{"internal/platform/loopback", []string{"internal/driver"}},
-	{"internal/platform/menuspeech", nil},
 	{"internal/platform/menutext", []string{"internal/driver", "desktop/locales"}},
 	{"internal/platform/objcblock", nil},
-	{"internal/platform/pcmoutput", []string{"internal/driver"}},
 	{"internal/platform/perfhud", []string{"internal/driver", "internal/engine", "internal/platform/apple"}},
 	{"internal/platform/picked", []string{"internal/driver"}},
 	{"internal/platform/privacy", []string{"internal/driver", "internal/platform/objcblock"}},
@@ -80,13 +70,11 @@ var layers = []struct {
 	{"internal/platform/updates", []string{"internal/driver", "internal/platform/imageload"}},
 	{"internal/platform/appimage", nil},
 	{"internal/platform/videoalpha", nil},
-	{"internal/platform/videoplay", []string{"internal/driver"}},
 	{"internal/platform/videoalpha/clips", nil},
 	{"internal/platform/viewtree", []string{"internal/driver"}},
 	{"internal/platform/webstyle", []string{"internal/driver"}},
-	{"internal/platform/", append([]string{"internal/driver", "internal/engine", "internal/testhost", "desktop/locales", "mobile/locales"}, platformShared...)},
-	// Headless browser tests reuse the browser asset reader. Windowless rendering and text measurement reuse Apple's native player without starting a platform host; core still imports no backend.
-	{"nsgotest", []string{"core", "gamepad", "internal/automation", "internal/devtools", "internal/driver", "internal/platform/apple", "internal/platform/imageload", "internal/testhost", "widget"}},
+	{"internal/platform/", append([]string{"internal/driver", "internal/engine", "internal/testhost", "desktop/locales"}, platformShared...)},
+	{"nsgotest", []string{"core", "gamepad", "internal/automation", "internal/devtools", "internal/driver", "internal/testhost", "widget"}},
 	{"", []string{"core", "internal/backend", "internal/dev", "internal/engine"}},
 	// The backend runs the app on the platform build tags pick, with the launch flags, the dev client, restarts and, where the platform's updater keeps no schedule, update checks.
 	{"internal/backend", []string{"core", "internal/crashreport", "internal/dev", "internal/engine", "internal/platform/", "internal/restart", "updater"}},
@@ -98,21 +86,18 @@ var layers = []struct {
 	// The code nsgo writes from catalogs runs on i18n.
 	{"i18n", []string{"core", "internal/cldr"}},
 	{"base/", []string{"core", "base/", "i18n"}},
-	{"mobile/locales", []string{"core", "i18n"}},
 	{"mobile", []string{"core"}},
-	{"web", []string{"core"}},
-	// Audio holds iOS's audio session for a library's own output beside the backends' players.
-	{"audio", []string{"core", "internal/audiosession"}},
+	{"audio", []string{"core"}},
 	// Gamepads reach GameController on Apple (with objcblock), XInput on Windows, evdev on Linux, navigator.getGamepads on the web, and the driver's bridge on Android and nsgotest.
 	{"gamepad", []string{"core", "internal/driver", "internal/platform/objcblock"}},
-	{"gpu", []string{"core", "internal/driver", "internal/shader", "internal/shader/wgsl", "internal/shaderir/"}},
+	{"gpu", []string{"core", "internal/driver", "internal/shader", "internal/shader/wgsl", "internal/shaderir"}},
 	{"desktop/locales", []string{"core", "i18n"}},
 	{"desktop", []string{"core"}},
 	{"updater/locales", []string{"core", "i18n"}},
 	{"updater", []string{"core", "updater/locales"}},
 	{"icons/", []string{"core"}},
 	{"ui/chat/locales", []string{"core", "i18n"}},
-	{"ui/", []string{"core", "base/", "ui/", "mobile", "mobile/locales", "desktop", "icons/"}},
+	{"ui/", []string{"core", "base/", "ui/", "mobile", "desktop", "icons/"}},
 	// The TSX test runner drives apps through nsgotest, and runs its VM's work on the test goroutine through nsgotest's hook in internal/testhost (PostToTest), as App.Post runs on the engine's on a target.
 	{"tsx/tsxtest", []string{"core", "internal/driver", "internal/testhost", "nsgotest", "tsx", "tsx/"}},
 	// The nsgo tool links the bundler, so it reaches no runtime.
@@ -127,29 +112,27 @@ var layers = []struct {
 	{"tsx/ui/", []string{"core", "base/", "ui/", "tsx", "tsx/"}},
 	// The scripts the page ships, which the tool writes as the page's files.
 	{"tsx/websrc", nil},
-	{"tsx/", []string{"core", "base/", "mobile", "desktop", "gamepad", "web", "internal/devtools", "tsx", "tsx/bundler", "tsx/internal/js", "tsx/pkg", "tsx/websrc"}},
+	{"tsx/", []string{"core", "base/", "mobile", "desktop", "internal/devtools", "tsx", "tsx/bundler", "tsx/internal/js", "tsx/pkg", "tsx/websrc"}},
 	// Apps use the public packages only, and the hosts that embed an
 	// example app its package.
-	{"examples/", []string{"", "audio", "cloud", "automation", "core", "base/", "ui/", "gpu", "mobile", "desktop", "desktop/locales", "web", "gamepad", "gameservices", "i18n", "icons/", "nsgotest", "tsx/", "updater", "widget", "examples/"}},
+	{"examples/", []string{"", "audio", "core", "base/", "ui/", "gpu", "mobile", "desktop", "desktop/locales", "gamepad", "i18n", "icons/", "nsgotest", "tsx/", "updater", "widget", "examples/"}},
 	// The nsgo tool links no component or runtime, so changing them does
 	// not build it again; it writes TSX declarations by running the app.
-	{"cmd/", []string{"core", "cmd/", "internal/automation", "internal/appstartup", "internal/mimeinfo", "internal/platform/android/runtime", "tsx/bundler", "tsx/pkg", "tsx/websrc"}},
+	{"cmd/nsgo/shareextension", []string{"internal/platform/shareinbox", "internal/platform/objcblock"}},
+	{"cmd/", []string{"core", "cmd/", "internal/automation", "internal/mimeinfo", "internal/platform/android/runtime", "tsx/bundler", "tsx/pkg", "tsx/websrc"}},
 	{"tools/", []string{"core"}},
 }
 
 // platformShared is the code several backends share, with the shader
 // writers but not the compiler, which only the core links.
 var platformShared = []string{
-	"internal/appstartup",
-	"internal/platform/authscheme",
 	"internal/audiosession", "internal/platform/apple", "internal/platform/canvas2d", "internal/platform/canvasmesh", "internal/platform/canvastest", "internal/platform/codescan", "internal/platform/field", "internal/platform/finger",
-	"internal/platform/appimage", "internal/platform/fontfile", "internal/platform/hover", "internal/platform/imagedecode", "internal/platform/imageload", "internal/platform/loopback", "internal/platform/menuspeech", "internal/platform/menutext", "internal/platform/objcblock", "internal/platform/perfhud", "internal/platform/picked", "internal/platform/privacy", "internal/platform/queue", "internal/platform/scrollbar", "internal/platform/speechd",
-	"internal/platform/ops", "internal/platform/pcmoutput", "internal/platform/textruns", "internal/platform/textselect", "internal/platform/updates", "internal/platform/videoalpha", "internal/platform/videoplay", "internal/platform/viewtree", "internal/platform/webstyle", "internal/shaderir/",
+	"internal/platform/appimage", "internal/platform/fontfile", "internal/platform/hover", "internal/platform/imagedecode", "internal/platform/imageload", "internal/platform/loopback", "internal/platform/menutext", "internal/platform/objcblock", "internal/platform/perfhud", "internal/platform/picked", "internal/platform/privacy", "internal/platform/queue", "internal/platform/scrollbar", "internal/platform/shareinbox", "internal/platform/speechd",
+	"internal/platform/ops", "internal/platform/textruns", "internal/platform/textselect", "internal/platform/updates", "internal/platform/videoalpha", "internal/platform/viewtree", "internal/platform/webstyle", "internal/shaderir/",
 }
 
 // owned lists modules outside NSGo that only some packages may import, by module path: what is large enough that an app links it only by asking for what needs it (docs/architecture/layers.md, What an app links).
 var owned = map[string][]string{
-	"github.com/gdamore/tcell/v3": {"internal/platform/tui"},
 	// Untie and the font it lays out in, for the formulas apps ask for.
 	"github.com/caelyreth/untie": {"base/formula"},
 	// limu, which reads and lays out Mermaid, for the diagrams apps ask for.
@@ -158,8 +141,8 @@ var owned = map[string][]string{
 
 // portable lists the packages that build unchanged for every target: no
 // purego, syscall or unsafe.
-var portable = []string{"core", "internal/automation", "internal/appstartup", "internal/dev/locales", "internal/driver", "internal/mimeinfo", "internal/layout", "internal/shader", "internal/shader/wgsl", "internal/shaderir/", "internal/engine",
-	"internal/testhost", "internal/cldr", "base/", "ui/", "i18n", "mobile", "web", "audio", "gpu", "desktop", "desktop/locales", "icons/", "nsgotest", "tsx", "tsx/websrc", "updater", "updater/locales"}
+var portable = []string{"core", "internal/automation", "internal/dev/locales", "internal/driver", "internal/mimeinfo", "internal/layout", "internal/shader", "internal/shader/wgsl", "internal/shaderir/", "internal/engine",
+	"internal/testhost", "internal/cldr", "base/", "ui/", "i18n", "mobile", "audio", "gpu", "desktop", "desktop/locales", "icons/", "nsgotest", "tsx", "tsx/websrc", "updater", "updater/locales"}
 
 // unportable are the packages among portable's that reach the system: the
 // terminal loads libghostty-vt and runs programs, on macOS, Linux and
@@ -186,7 +169,7 @@ var devImports = map[string][]string{"internal/dev": {"internal/dev/locales", "i
 var automationImports = map[string][]string{"internal/dev": {"nsgotest"}}
 
 // variantLayerTargets are the builds the nsgo tool makes with a variant's tag: nsgo watchos's, nsgo embed's iOS framework and nsgo miniprogram's.
-var variantLayerTargets = [][3]string{{"darwin", "arm64", "nsgotui"}, {"linux", "amd64", "nsgotui"}, {"windows", "amd64", "nsgotui"}, {"ios", "arm64", "nsgowatch"}, {"ios", "arm64", "nsgoembed"}, {"js", "wasm", "nsgominiprogram,nsgo_noshader"}}
+var variantLayerTargets = [][3]string{{"ios", "arm64", "nsgowatch"}, {"ios", "arm64", "nsgoembed"}, {"js", "wasm", "nsgominiprogram,nsgo_noshader"}}
 
 // devLayerTargets are the targets whose nsgo dev builds (the nsgodev tag) are checked too: the dev client's files differ only between the web and the rest.
 var devLayerTargets = [][2]string{{"darwin", "arm64"}, {"js", "wasm"}}
@@ -220,15 +203,10 @@ func TestLayering(t *testing.T) {
 		check(target[0], target[1], "nsgodev")
 	}
 	check("js", "wasm", "nsgodev,nsgominiprogram,nsgo_noshader")
-	// nsgo dev -automation links the agent and the platform surfaces it drives.
+	// nsgo dev -automation runs on macOS and Apple devices and simulators (iOS, tvOS and watchOS).
 	check("darwin", "arm64", "nsgodev,nsgoautomation")
-	check("android", "arm64", "nsgodev,nsgoautomation")
-	check("windows", "arm64", "nsgodev,nsgoautomation")
 	check("ios", "arm64", "nsgodev,nsgoautomation")
 	check("ios", "arm64", "nsgowatch,nsgodev,nsgoautomation")
-	check("linux", "amd64", "nsgodev,nsgoautomation")
-	check("js", "wasm", "nsgodev,nsgoautomation")
-	check("js", "wasm", "nsgominiprogram,nsgo_noshader,nsgodev,nsgoautomation")
 }
 
 type listedPackage struct {
@@ -318,9 +296,6 @@ func layerImports(pkg, tags string) ([]string, bool) {
 	for _, l := range layers {
 		if matches(pkg, l.pkg) {
 			allowed := l.imports
-			if pkg == "core" && hasTag(tags, "nsgoautomation", "nsgotest", "nsgocheck") {
-				allowed = append(slices.Clip(allowed), "internal/automation")
-			}
 			if matches(pkg, "internal/platform/") && hasTag(tags, "nsgotest", "nsgoautomation") {
 				allowed = append(slices.Clip(allowed), "core")
 			}

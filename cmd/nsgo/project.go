@@ -64,8 +64,6 @@ type project struct {
 	// noticeArchitectures is set for a bundle with more than one Go binary.
 	noticeArchitectures []string
 	thirdPartyNotices   string
-	// nativeLibraries are the declarations selected for each executable slice.
-	nativeLibraries map[string][]nativeLibrary
 
 	Name    string `yaml:"name"`
 	ID      string `yaml:"id"`
@@ -84,8 +82,6 @@ type project struct {
 	// Appearance starts the app light or dark whatever the system's, its
 	// launch screen and window included; empty follows the system.
 	Appearance string `yaml:"appearance"`
-	// LaunchScreen gives standalone iOS and Android apps their launch artwork.
-	LaunchScreen *launchScreen `yaml:"launch_screen"`
 	// Window is no longer nsgo.yaml's: Go code sizes windows.
 	Window any `yaml:"window"`
 	// Widget is the app's home-screen card on HarmonyOS: the title it shows.
@@ -145,13 +141,9 @@ type project struct {
 	} `yaml:"i18n"`
 	// Web is the web target's: Host is a JS module, relative to
 	// nsgo.yaml and inside its directory, whose createHost(player) gives
-	// the app's page its host. Offline enables an offline launch of the
-	// published site through a service worker.
+	// the app's page its host.
 	Web struct {
-		Host    string `yaml:"host"`
-		Offline bool   `yaml:"offline"`
-		// Base fixes assets to an absolute deployment path for deep links.
-		Base string `yaml:"base"`
+		Host string `yaml:"host"`
 	} `yaml:"web"`
 	// MiniProgram is the mini program targets': AppID holds the mini
 	// program's on each platform (wechat, qq, alipay, douyin), and
@@ -165,38 +157,29 @@ type project struct {
 	// their Info.plist, such as NSMicrophoneUsageDescription.
 	Apple struct {
 		Info map[string]any `yaml:"info"`
+		// ShareTypes are the UTIs the iOS share extension accepts.
+		ShareTypes []string `yaml:"share_types"`
 		// RequiresFullScreen is the iOS package's UIRequiresFullScreen, true unless set; false lets an iPad run the app in Split View, Slide Over and Stage Manager.
 		RequiresFullScreen *bool `yaml:"requires_full_screen"`
 		// MultipleScenes is the iOS package's UIApplicationSupportsMultipleScenes, false unless set; true lets the system create more than one scene session for the app.
 		MultipleScenes *bool `yaml:"multiple_scenes"`
 		// Orientations are the iPad's UISupportedInterfaceOrientations~ipad, of portrait, portrait_upside_down, landscape_left and landscape_right; all four when RequiresFullScreen is false, which needs them, and undeclared otherwise.
 		Orientations []string `yaml:"orientations"`
-		// AppGroup is the app group an iOS app shares with its widgets,
-		// group.<id> by default. Setting it explicitly with app_clip also
-		// shares persistent data and storage with the App Clip.
+		// AppGroup is the app group an iOS app shares with its extensions,
+		// group.<id> by default.
 		AppGroup string `yaml:"app_group"`
 		// SignInWithApple claims com.apple.developer.applesignin, which Sign in with Apple needs, for the iOS and tvOS packages and the Mac App Store's (sign.go).
 		SignInWithApple bool `yaml:"sign_in_with_apple"`
 		// Purchases puts StoreKit's library, which in-app purchases go through, into the macOS, iOS and tvOS packages (storekit.go).
 		Purchases bool `yaml:"purchases"`
-		// ICloud configures Apple iCloud key-value store and ubiquity document containers (cloud.go); top-level cloud: is its provider-neutral alias.
-		ICloud cloudConfig `yaml:"icloud"`
 		// Privacy adds the app's required-reason APIs, tracking settings and collected data to PrivacyInfo.xcprivacy.
 		Privacy privacySettings `yaml:"privacy"`
 	} `yaml:"apple"`
-	// Cloud configures cloud storage entitlements, such as Apple iCloud key-value store and ubiquity containers (cloud.go).
-	Cloud cloudConfig `yaml:"cloud"`
-	// ICloud is a top-level alias for Cloud for Apple iCloud entitlements (cloud.go).
-	ICloud cloudConfig `yaml:"icloud"`
-	// FileTypes are the kinds of documents the app opens, which desktop
-	// and full iOS packages register (filetypes.go).
+	// FileTypes are the kinds of documents the app opens, which its macOS
+	// package registers (filetypes.go).
 	FileTypes []fileType `yaml:"file_types"`
 	// URLSchemes are the schemes of the app's own links, which its desktop, iOS and Android packages register.
 	URLSchemes []string `yaml:"url_schemes"`
-	// AppLinks are the HTTPS hosts associated with the full app on iOS and Android; the app's server supplies their association files.
-	AppLinks []string `yaml:"app_links"`
-	// Commands are command-line programs the app's desktop packages ship beside its executable (commands.go).
-	Commands []command `yaml:"commands"`
 	// Widgets are the kinds of the app's widgets, which nsgo build puts
 	// into its macOS and iOS packages as a widget extension (widgets.go).
 	Widgets []widgetKind `yaml:"widgets"`
@@ -212,18 +195,12 @@ type project struct {
 		Permissions []string `yaml:"permissions"`
 		TargetSDK   int      `yaml:"target_sdk"`
 		Recording   bool     `yaml:"recording"`
-		// BackgroundMotion declares the bounded shortService used by WatchBackgroundMotion.
-		BackgroundMotion bool `yaml:"background_motion"`
 
 		Classes []string `yaml:"classes"`
 		// ShareTypes are the MIME types the launcher accepts from the sharesheet.
 		ShareTypes []string `yaml:"share_types"`
-		// BackgroundDownloads declares the runtime's dataSync download service.
-		BackgroundDownloads bool `yaml:"background_downloads"`
 		// LoopbackCleartext allows HTTP to loopback in standalone packages.
 		LoopbackCleartext bool `yaml:"loopback_cleartext"`
-		// UsesCleartextTraffic allows plain HTTP to any host in standalone packages.
-		UsesCleartextTraffic bool `yaml:"uses_cleartext_traffic"`
 	} `yaml:"android"`
 	Compliance storeCompliance `yaml:"compliance"`
 	// Harmonyos is the harmonyos target's: Permissions are the ones its
@@ -240,19 +217,16 @@ type project struct {
 	// is the volume's icon, else the app's. Category is the app's
 	// LSApplicationCategoryType, such as public.app-category.productivity,
 	// which the Mac App Store requires, and Entitlements are what a store
-	// build's sandboxed app claims beyond its defaults (macstore.go); a
-	// signed non-store build (such as Developer ID) also claims
-	// keychain-access-groups from it (sign.go).
+	// build's sandboxed app claims beyond its defaults (macstore.go).
 	MacOS struct {
 		DMGBackground string         `yaml:"dmg_background"`
 		DMGIcon       string         `yaml:"dmg_icon"`
 		Category      string         `yaml:"category"`
 		Entitlements  map[string]any `yaml:"entitlements"`
 	} `yaml:"macos"`
-	// Windows is the Windows target's options: CommandLine adds a .com console companion beside the GUI executable, and it or Path has the installer put the app's folder on the user's Path, so consoles find the companion and the app's commands, while InstallerIcon and UninstallerIcon, an .ico or a square PNG, are the icons of the setup program and the uninstaller, else the app's. DeviceCapabilities are the devices a store build's MSIX declares the app uses, such as microphone and webcam, which Windows asks the user for and keeps under the package's name. Publisher is who publishes the app, the CompanyName of its executables and its installer and the publisher of its uninstall entry, else Store's publisher name. Store is the Microsoft Store's package identity, as Partner Center lists it, which a store build's MSIX carries (msix.go): the package's name, its publisher (CN=...) and the publisher's display name.
+	// Windows is the Windows target's options: CommandLine adds a .com console companion beside the GUI executable, while InstallerIcon and UninstallerIcon, an .ico or a square PNG, are the icons of the setup program and the uninstaller, else the app's. DeviceCapabilities are the devices a store build's MSIX declares the app uses, such as microphone and webcam, which Windows asks the user for and keeps under the package's name. Publisher is who publishes the app, the CompanyName of its executables and its installer and the publisher of its uninstall entry, else Store's publisher name. Store is the Microsoft Store's package identity, as Partner Center lists it, which a store build's MSIX carries (msix.go): the package's name, its publisher (CN=...) and the publisher's display name.
 	Windows struct {
 		CommandLine        bool     `yaml:"command_line"`
-		Path               bool     `yaml:"path"`
 		Publisher          string   `yaml:"publisher"`
 		InstallerIcon      string   `yaml:"installer_icon"`
 		UninstallerIcon    string   `yaml:"uninstaller_icon"`
@@ -263,18 +237,15 @@ type project struct {
 			PublisherName string `yaml:"publisher_name"`
 		} `yaml:"store"`
 	} `yaml:"windows"`
-	// Linux is the Linux target's: Categories are its desktop entry's freedesktop menu categories, which file it in application menus and need a main one (validateLinuxCategories). Maintainer is who its Debian and Arch packages name as theirs, "Name <email>", else the app's name. Depends and Recommends add to those packages' Depends and Recommends, and depend and optdepend lines, after NSGo's own (linuxpkg.go). Summary, License, an SPDX expression, and FlatpakRuntime, GNOME's runtime version, are what the AppStream metadata and a store build's Flatpak manifest say (flatpak.go). Share is a directory, relative to nsgo.yaml, whose files the Debian and Arch packages install under /usr/share and the AppImage under its AppDir's usr/share, such as metainfo/<id>.metainfo.xml, which replaces NSGo's (linuxShareFiles).
+	// Linux is the Linux target's: Categories are its desktop entry's freedesktop menu categories, which file it in application menus and need a main one (validateLinuxCategories). Maintainer is who its Debian and Arch packages name as theirs, "Name <email>", else the app's name. Depends and Recommends add to those packages' Depends and Recommends, and depend and optdepend lines, after NSGo's own (linuxpkg.go). Summary, License, an SPDX expression, and FlatpakRuntime, GNOME's runtime version, are what a store build's AppStream metadata and Flatpak manifest say (flatpak.go).
 	Linux struct {
-		Categories []string `yaml:"categories"`
-		// AppImageUpdate overrides the external update locator; empty disables discovery.
-		AppImageUpdate *string   `yaml:"appimage_update"`
+		Categories     []string  `yaml:"categories"`
 		Maintainer     string    `yaml:"maintainer"`
 		Summary        string    `yaml:"summary"`
 		License        string    `yaml:"license"`
 		FlatpakRuntime string    `yaml:"flatpak_runtime"`
 		Depends        linuxDeps `yaml:"depends"`
 		Recommends     linuxDeps `yaml:"recommends"`
-		Share          string    `yaml:"share"`
 	} `yaml:"linux"`
 	// Releases is where the app is published: GitHub, a repository
 	// ("owner/name") whose releases, tagged TagPrefix (v by default) and
@@ -295,8 +266,7 @@ type project struct {
 	// Mobile is the iOS and Android targets': ExcludeResources are paths in
 	// resources/ their packages leave out, such as what only desktops run.
 	Mobile struct {
-		ExcludeResources []string          `yaml:"exclude_resources"`
-		AssetPacks       []assetPackConfig `yaml:"asset_packs"`
+		ExcludeResources []string `yaml:"exclude_resources"`
 	} `yaml:"mobile"`
 	Sign  signing `yaml:"sign"`
 	Build struct {
@@ -347,11 +317,9 @@ type icons struct {
 	// Apple is an Icon Composer .icon for macOS, iOS and an Apple Watch
 	// without an icon of its own, or an .icns for macOS.
 	Apple string `yaml:"apple"`
-	// PNG is the shared square-image fallback for targets without their own artwork, including Apple targets Apple does not cover.
+	// PNG is a square image for every other target, and for Apple targets
+	// Apple does not cover.
 	PNG string `yaml:"png"`
-	// Windows and Linux replace PNG for their packages, store assets and installers.
-	Windows string `yaml:"windows"`
-	Linux   string `yaml:"linux"`
 	// TVOS is the Apple TV's: Xcode's .brandassets with its layered icon
 	// and top shelf images, or a wide image that fills them. Without it
 	// the PNG layers as the app icon and top shelf images.
@@ -365,8 +333,6 @@ type icons struct {
 }
 
 type androidIcon struct {
-	// PNG replaces icon.png for Android bitmap icons; adaptive layers remain optional.
-	PNG        string `yaml:"png"`
 	Foreground string `yaml:"foreground"`
 	Background string `yaml:"background"`
 	Monochrome string `yaml:"monochrome"`
@@ -430,13 +396,7 @@ func load(dir string) (*project, error) {
 	if p.Name == "" {
 		return nil, fmt.Errorf("nsgo.yaml: name is required")
 	}
-	if err := p.validateAppleMinimums(); err != nil {
-		return nil, fmt.Errorf("nsgo.yaml: %w", err)
-	}
 	if err := p.validateIPadMultitasking(); err != nil {
-		return nil, err
-	}
-	if err := p.validateAssetPacks(); err != nil {
 		return nil, err
 	}
 	if strings.Contains(p.Name, "'") && strings.Contains(p.Name, `"`) {
@@ -460,9 +420,6 @@ func load(dir string) (*project, error) {
 	default:
 		return nil, fmt.Errorf("nsgo.yaml: appearance is %q; use light, dark or leave it out", p.Appearance)
 	}
-	if err := p.validateLaunchScreen(); err != nil {
-		return nil, fmt.Errorf("nsgo.yaml: %w", err)
-	}
 	if p.Window != nil {
 		return nil, fmt.Errorf("nsgo.yaml: window is set in Go now: nsgo.Run(Root, nsgo.WindowSize(width, height)), or desktop.WindowOptions")
 	}
@@ -471,11 +428,6 @@ func load(dir string) (*project, error) {
 	}
 	if owner, name, ok := strings.Cut(p.Releases.GitHub, "/"); p.Releases.GitHub != "" && (!ok || owner == "" || name == "" || strings.Contains(name, "/")) {
 		return nil, fmt.Errorf("nsgo.yaml: release.github %q is not owner/name", p.Releases.GitHub)
-	}
-	if p.Linux.AppImageUpdate != nil {
-		if err := validateAppImageUpdate(*p.Linux.AppImageUpdate); err != nil {
-			return nil, fmt.Errorf("nsgo.yaml: linux.appimage_update: %w", err)
-		}
 	}
 	for _, tag := range p.Build.Tags {
 		if !validTag(tag) {
@@ -515,10 +467,7 @@ func load(dir string) (*project, error) {
 	if err := p.validateURLSchemes(); err != nil {
 		return nil, fmt.Errorf("nsgo.yaml: %w", err)
 	}
-	if err := p.validateAppLinks(); err != nil {
-		return nil, fmt.Errorf("nsgo.yaml: %w", err)
-	}
-	if err := p.validateCommands(); err != nil {
+	if err := p.validateIOSShareTypes(); err != nil {
 		return nil, fmt.Errorf("nsgo.yaml: %w", err)
 	}
 	if err := p.validateAndroidShareTypes(); err != nil {
@@ -533,9 +482,6 @@ func load(dir string) (*project, error) {
 	if err := p.validatePrivacy(); err != nil {
 		return nil, fmt.Errorf("nsgo.yaml: %w", err)
 	}
-	if err := p.validateCloud(); err != nil {
-		return nil, fmt.Errorf("nsgo.yaml: %w", err)
-	}
 	if err := p.validateUpdates(); err != nil {
 		return nil, fmt.Errorf("nsgo.yaml: %w", err)
 	}
@@ -545,10 +491,7 @@ func load(dir string) (*project, error) {
 	if err := p.validateLinuxCategories(); err != nil {
 		return nil, fmt.Errorf("nsgo.yaml: %w", err)
 	}
-	if p.Linux.Share != "" {
-		p.Linux.Share = p.resolve(p.Linux.Share)
-	}
-	for _, path := range []*string{&p.Sign.Profile, &p.Sign.WidgetsProfile, &p.Sign.AssetPacksProfile, &p.Sign.ClipProfile, &p.Sign.MacOSProfile, &p.Sign.Keystore, &p.Sign.Certificate} {
+	for _, path := range []*string{&p.Sign.Profile, &p.Sign.WidgetsProfile, &p.Sign.ShareProfile, &p.Sign.ClipProfile, &p.Sign.MacOSProfile, &p.Sign.Keystore, &p.Sign.Certificate} {
 		if *path != "" {
 			*path = p.resolve(*path)
 		}
@@ -615,19 +558,14 @@ func (p *project) appLdflags() string {
 // corePath is package core's, which holds the app's identity (core.App).
 const corePath = "github.com/nsgo-dev/nsgo/core"
 
-// identityLdflags are the -X flags building nsgo.yaml's name, ID, version and build number into core.App, which the app and its commands take.
-func (p *project) identityLdflags() string {
-	return strings.Join([]string{xflag(corePath+".appName", p.Name), xflag(corePath+".appID", p.ID),
-		xflag(corePath+".appVersion", p.Version), xflag(corePath+".appBuild", p.BundleVersion())}, " ")
-}
-
 // ldflags builds nsgo.yaml's name, ID, version and build number into
 // core.App, and passes the rest of what nsgo.Run takes from it.
 func (p *project) ldflags(extra ...string) string {
 	const pkg = "github.com/nsgo-dev/nsgo"
 	// The dev client, which nsgo.Run starts in dev builds.
 	const devPkg = pkg + "/internal/dev"
-	flags := p.identityLdflags()
+	flags := strings.Join([]string{xflag(corePath+".appName", p.Name), xflag(corePath+".appID", p.ID),
+		xflag(corePath+".appVersion", p.Version), xflag(corePath+".appBuild", p.BundleVersion())}, " ")
 	// The linker keeps the last -X of a variable, so the app's flags go first and cannot replace the tool's.
 	if app := p.appLdflags(); app != "" {
 		flags = app + " " + flags
