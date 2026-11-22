@@ -67,7 +67,7 @@ func allowedPublicDriverType(name string) bool {
 	// to app-facing types as these entries are removed (#181).
 	case
 		"Event", "EventKind", "EventMask", "ImageConfig",
-		"InputConfig", "ModalConfig", "PictureInPictureConfig", "ScreenConfig",
+		"ImageSampling", "InputConfig", "ModalConfig", "PictureInPictureConfig", "ScreenConfig",
 		"ScrollConfig", "StickyCell", "StorageChange", "StorageOp",
 		"SurfaceKind", "TouchGeometry", "VideoConfig", "ViewKind",
 		"ViewProps", "ViewStyle", "WebConfig":
