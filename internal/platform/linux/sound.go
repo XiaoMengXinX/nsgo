@@ -252,9 +252,9 @@ func soundDuration(pcm []byte) time.Duration {
 }
 
 type soundVoice struct {
-	play           soundPlayback
-	bin, src, pad  uintptr
-	started, until time.Time
+	play                  soundPlayback
+	bin, src, pad, volume uintptr
+	started, until        time.Time
 }
 
 type soundPlayback struct {
@@ -415,7 +415,7 @@ func (m *soundMixer) prepareVoice(play soundPlayback) (soundVoice, bool) {
 	// Apple's varispeed, and GStreamer resamples it back to the mixer rate.
 	input := fmt.Sprintf("audio/x-raw,format=F32LE,layout=interleaved,channels=2,rate=%d", int(math.Round(float64(play.rate)*soundRate)))
 	desc := "appsrc name=voice is-live=true format=time min-latency=0 max-latency=0 caps=\"" + input +
-		"\" ! audioresample ! capsfilter caps=\"" + soundCaps + "\""
+		"\" ! audioresample ! capsfilter caps=\"" + soundCaps + "\" ! volume name=volume volume=" + fmt.Sprintf("%g", play.volume)
 	if play.pan != 0 {
 		// The simple method is a balance: it attenuates the side away from the pan and leaves the other untouched, as driver.AudioPanGains does. audiopanorama is in gst-plugins-good, so a centered voice does not need it.
 		desc += fmt.Sprintf(" ! audiopanorama method=simple panorama=%g", play.pan)
@@ -433,7 +433,7 @@ func (m *soundMixer) prepareVoice(play soundPlayback) (soundVoice, bool) {
 		gstObjectUnref(bin)
 		return soundVoice{}, false
 	}
-	voice := soundVoice{play: play, bin: bin, src: gstElementGetStaticPad(bin, cstr("src")),
+	voice := soundVoice{play: play, bin: bin, src: gstElementGetStaticPad(bin, cstr("src")), volume: gstBinGetByName(bin, cstr("volume")),
 		pad: gstElementGetRequestPad(m.mixer, cstr("sink_%u"))}
 	start := gstElementRunningTime(m.pipeline)
 	now := time.Now()
@@ -446,7 +446,7 @@ func (m *soundMixer) prepareVoice(play soundPlayback) (soundVoice, bool) {
 		m.remove(voice)
 		return soundVoice{}, false
 	}
-	setSoundVolume(voice.pad, play.volume)
+	setSoundVolume(voice.volume, play.volume)
 	gstPadSetOffset(voice.src, int64(start)+int64(lead))
 	if gstPadLink(voice.src, voice.pad) != 0 || gstElementSyncState(bin) == 0 {
 		m.remove(voice)
