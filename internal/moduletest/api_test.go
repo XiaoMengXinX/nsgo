@@ -230,10 +230,15 @@ var twinned = []string{"base.List.ListStyle", "base.Slider.StartLabel", "base.Tr
 
 // textFuncExceptions records one-shot options, data snapshots and existing
 // component props still awaiting bindings. Remove a field when adding its
-// twin.
+// twin. SelectionBlock and SelectionInline are semantic serialization values:
+// View/Text.SelectionBlockFunc supplies the complete record, including nested
+// inlines, rather than independently binding each record field.
 var textFuncExceptions = strings.Fields(`
 core.Composition.Text core.HeaderSymbol.Label core.MenuItem.Label core.Notification.Title
-core.PickDirectoriesOptions.Title core.PickFilesOptions.Title core.ShareOptions.Text core.TabBarItem.Title
+core.PickDirectoriesOptions.Title core.PickFilesOptions.Title
+core.SelectionBlock.Title core.SelectionBlock.Label
+core.SelectionInline.Text core.SelectionInline.Title core.SelectionInline.Label
+core.ShareOptions.Text core.TabBarItem.Title
 core.TextSelection.Text core.TrayOptions.Title core.WindowOptions.Title
 
 base.Accordion.Label base.AccordionPanel.Label base.AccordionTrigger.Label base.AccordionTrigger.Hint
