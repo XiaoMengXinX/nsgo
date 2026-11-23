@@ -41,6 +41,7 @@ type Scope struct {
 	catch    func(error)
 	ctx      context.Context
 	cancel   context.CancelFunc
+	work     *workObserver
 	comp     *computation // set when the scope is a computation's
 	// surf is the tree of the window the scope is in, inherited by what
 	// it owns; nil leaves it the graph's first.
@@ -93,6 +94,10 @@ type RootOptions struct {
 	Report func(error)
 	// RequestFrame tells the host that the app waits for the next display frame: it calls Scope.RunFrame, or Scope.RunFrameAt with the display's time for the frame, when that frame begins, and is not asked again until then. It runs on the graph's goroutine, so it must not block. A host without display frames leaves it nil, and the callbacks wait.
 	RequestFrame func()
+	// RequestSurfaceFrame is RequestFrame for a host with independent displays. It calls Tree.RunFrameAt for the surface named by id.
+	RequestSurfaceFrame func(id uint32)
+	// SetFrameRate updates the host's preferred display rate for the surface, if the host can change it. It must not block.
+	SetFrameRate func(id uint32, rate FrameRateRange)
 	// Storage keeps the app's entries; a store in memory when nil.
 	Storage *Store
 	// Secrets is the platform's secure store, which Scope.Secrets keeps secrets in; nil where there is none, so Secrets fails with ErrSecretsUnavailable.
@@ -101,6 +106,14 @@ type RootOptions struct {
 	NetworkWatcher interface {
 		WatchNetwork(changed func(Network)) (initial Network, stop func())
 	}
+	// ReadAsset reads a slash-separated resource path on a worker goroutine; nil where the host cannot read bundled files.
+	ReadAsset func(context.Context, string) ([]byte, error)
+	// Updater is the initial state of package updater, supplied by the platform.
+	Updater UpdaterState
+	// GameServices is a per-app game services backend (such as nsgotest's fake) for package gameservices; nil uses the platform backend.
+	GameServices GameServices
+	// Cloud is an optional per-app cloud storage backend for package cloud, used by nsgotest to isolate each test app's in-memory cloud store. Nil uses the platform backend.
+	Cloud CloudStore
 	// DataDir, CacheDir and LogsDir are the app's directories, "" where the target has none.
 	DataDir, CacheDir, LogsDir string
 	// Host is the channel to the host app that embeds the app: its
@@ -124,12 +137,13 @@ func NewRoot(opts RootOptions) *Scope {
 		opts.Clock = SystemClock{}
 	}
 	rt := &runtime{graphOwner: newGraphOwner(opts.CheckCommits), post: opts.Post, clock: opts.Clock, report: opts.Report, checkCommits: opts.CheckCommits,
-		store: opts.Storage, secrets: opts.Secrets, dataDir: opts.DataDir, cacheDir: opts.CacheDir, logsDir: opts.LogsDir,
-		requestFrame: opts.RequestFrame, windows: opts.Windows, takesHotKeys: opts.HotKeys, tray: opts.Tray, networkWatcher: opts.NetworkWatcher}
+		store: opts.Storage, secrets: opts.Secrets, readAsset: opts.ReadAsset, gameServices: opts.GameServices, cloud: opts.Cloud, dataDir: opts.DataDir, cacheDir: opts.CacheDir, logsDir: opts.LogsDir,
+		requestFrame: opts.RequestFrame, requestSurfaceFrame: opts.RequestSurfaceFrame, setFrameRate: opts.SetFrameRate, windows: opts.Windows, takesHotKeys: opts.HotKeys, tray: opts.Tray, networkWatcher: opts.NetworkWatcher}
 	rt.root = &Scope{rt: rt}
 	if devtools.Enabled {
 		rt.dev = newDevState()
 	}
+	rt.updater = NewSignal(rt.root, opts.Updater)
 	if opts.Host != nil {
 		rt.attachHost(opts.Host)
 	}
@@ -140,6 +154,9 @@ const maxRuns = 1_000_000
 
 type runtime struct {
 	graphOwner
+	workObserved bool
+	activeWork   *workObserver
+	automation   automationToolRegistry
 	aborted      bool // fault recovery must never schedule another computation
 	checkCommits bool
 	classCache   parseCache[classSource, *classList]
@@ -160,24 +177,30 @@ type runtime struct {
 	clock            Clock
 	report           func(error)
 
-	// The callbacks waiting for the next display frame, whether the host has been asked for it, the last frame's time (which the next never precedes), and the frame sequence and active flag read by package gamepad.
-	frames         []*frameCallback
-	frameRequested bool
-	frameAt        time.Time
-	frameSeq       uint64
-	inFrame        bool
-	requestFrame   func()
-	networkWatcher driver.NetworkWatcher
-	env            *Env
-	tree           *Tree
-	root           *Scope
-	store          *Store
-	storage        *storageWatch
-	secrets        driver.SecretStore
-	dataDir        string
-	cacheDir       string
-	logsDir        string
-	host           *hostApp
+	// firstFrames serves the first tree and scopes with no tree. Every
+	// other surface keeps its own queue and cadence.
+	firstFrames         frameQueue
+	frameRequested      bool   // a request to a host with one shared clock
+	frameSeq            uint64 // display frames run so far, for package gamepad (FrameState)
+	inFrame             bool   // set while a frame's callbacks run, for package gamepad
+	requestFrame        func()
+	requestSurfaceFrame func(uint32)
+	setFrameRate        func(uint32, FrameRateRange)
+	env                 *Env
+	tree                *Tree
+	root                *Scope
+	store               *Store
+	storage             *storageWatch
+	secrets             driver.SecretStore
+	readAsset           func(context.Context, string) ([]byte, error)
+	gameServices        driver.GameServices
+	cloud               CloudStore
+	dataDir             string
+	cacheDir            string
+	logsDir             string
+	host                *hostApp
+	networkWatcher      driver.NetworkWatcher
+	updater             *Signal[UpdaterState]
 	// restricted says an owner was given an Access (ProvideAccess), so
 	// requests look for one.
 	restricted bool
@@ -196,6 +219,10 @@ type runtime struct {
 	speaking *utterance
 	// audio is the engine's sounds and players, made with the first.
 	audio *audioState
+	// Now Playing is shared by every surface of the app.
+	nowPlaying    *driver.NowPlayingUpdate
+	mediaHandlers []*mediaHandler
+	mediaRevision uint32
 	// causes are what ran since a tree last committed, while driver.TraceCauses is set.
 	causes causes
 	// dev is what DevTools read, while devtools.Enabled.
@@ -218,6 +245,8 @@ type runtime struct {
 	taskProgress     driver.TaskProgress
 	taskProgressFrom uint32
 	taskProgressSent bool
+	// updateActive says an in-app update downloads or installs (UpdateActive).
+	updateActive atomic.Bool
 	// windows are the main window's options where the platform opens
 	// windows (RootOptions.Windows); surfaces the trees of the windows,
 	// panels and tray views opened, keyed those opened with a key.
@@ -243,7 +272,10 @@ type runtime struct {
 	reopens  []*reopenHandler
 	// opens hear the files the system opens with the app, and links the app's own links (desktop.OnOpenLinks).
 	opens, links openQueue[string]
-	shares       openQueue[driver.SharedDelivery]
+	address      *appAddress
+	shares       openQueue[[]driver.SharedItem]
+	// authLinks claim the private redirect URIs whose callbacks arrive as open links, including sessions started in an opened surface.
+	authLinks map[string]*authSession
 	// dock is the app icon's menu, the one a surface set last.
 	dock     dockMenu
 	trays    map[uint32]*Tray
@@ -592,7 +624,19 @@ func (rt *runtime) run(o *Scope, fn func()) {
 	rt.owner, rt.observer = o, nil
 	defer func() { rt.owner, rt.observer = prevOwner, prevObs }()
 	rt.batch++
+	end := rt.beginWork(o)
+	if end != nil {
+		defer func() {
+			if end != nil {
+				end()
+			}
+		}()
+	}
 	rt.guard(o, fn)
+	if end != nil {
+		end()
+		end = nil
+	}
 	rt.batch--
 	if rt.batch == 0 && !rt.flushing {
 		rt.flush()
@@ -800,6 +844,14 @@ func (c *computation) run() {
 	rt := c.rt
 	// The batch covers the disposal too, so a cleanup's write runs nothing before c has run again.
 	rt.batch++
+	end := c.Scope.BeginWork()
+	if end != nil {
+		defer func() {
+			if end != nil {
+				end()
+			}
+		}()
+	}
 	c.disposeOwned()
 	c.unlink()
 	c.state = clean
@@ -813,6 +865,10 @@ func (c *computation) run() {
 			changed = c.fn()
 		}
 	})
+	if end != nil {
+		end()
+		end = nil
+	}
 	// Its own time: what its writes run next, in maybeFlush, is theirs.
 	if rt.dev != nil {
 		rt.dev.ran(c, time.Since(began))
