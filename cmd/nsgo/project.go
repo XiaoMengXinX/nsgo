@@ -526,6 +526,9 @@ func load(dir string) (*project, error) {
 	if err := p.validateAndroidShareTypes(); err != nil {
 		return nil, fmt.Errorf("nsgo.yaml: %w", err)
 	}
+	if err := p.validateIOSShareTypes(); err != nil {
+		return nil, fmt.Errorf("nsgo.yaml: %w", err)
+	}
 	if err := p.validateWidgets(); err != nil {
 		return nil, fmt.Errorf("nsgo.yaml: %w", err)
 	}
