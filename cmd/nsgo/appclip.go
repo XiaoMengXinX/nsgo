@@ -8,10 +8,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
 	"rsc.io/qr"
+
+	"github.com/nsgo-dev/nsgo/internal/appstartup"
 )
 
 // An App Clip is a small part of an iOS app that runs without being
@@ -78,7 +81,7 @@ func (p *project) validateAppClip() error {
 	if c.Minimum == "" {
 		c.Minimum = "16.0"
 	}
-	if major := c.major(); major < 16 {
+	if version, ok := appleVersion(c.Minimum); !ok || version[0] < 16 {
 		return fmt.Errorf("app_clip.minimum %q is not an iOS version from 16.0", c.Minimum)
 	} else if !strings.Contains(c.Minimum, ".") {
 		c.Minimum += ".0"
@@ -118,18 +121,10 @@ func (p *project) clipProject() *project {
 	c.Name, c.ID = p.AppClip.Name, p.AppClip.ID
 	c.Dir = p.resolve(p.AppClip.Main)
 	c.AppClip, c.Widgets, c.FileTypes, c.LiveActivities = nil, nil, nil, liveActivities{}
+	c.AppLinks = nil
 	// A clip, kept small, sells nothing: its app does.
 	c.Apple.Purchases = false
-	c.Apple.ShareTypes = nil
 	return &c
-}
-
-// IOSMinimum is MinimumOSVersion of p's iOS package.
-func (p *project) IOSMinimum() string {
-	if p.clipParent != "" {
-		return p.parentClip.Minimum
-	}
-	return iOS.minimum
 }
 
 // clipPlist returns the entries of an App Clip's Info.plist, "" for an
@@ -183,13 +178,44 @@ func addIOSAppClip(ctx context.Context, p *project, app string, simulator bool) 
 	return nil
 }
 
+// clipStorageGroup opts a clip and its full app into shared persistent
+// storage only when apple.app_group is explicit. Widgets alone keep the
+// app's existing sandbox storage.
+func (p *project) clipStorageGroup() string {
+	if p.AppClip != nil || p.clipParent != "" {
+		return p.Apple.AppGroup
+	}
+	return ""
+}
+
+func (p *project) clipStoragePlist() string {
+	if group := p.clipStorageGroup(); group != "" {
+		return "<key>" + appstartup.StorageAppGroupKey + "</key><string>" + xmlText(group) + "</string>"
+	}
+	return ""
+}
+
+func (p *project) needsIOSAppGroup() bool {
+	return p.iosExtension() || p.clipStorageGroup() != ""
+}
+
+// checkIOSAppGroup refuses a profile that cannot reach the configured
+// shared container, before signing a build that would fail at startup.
+func (p *project) checkIOSAppGroup(entitlements map[string]any, profile string) error {
+	groups, _ := entitlements["com.apple.security.application-groups"].([]any)
+	if p.needsIOSAppGroup() && !slices.Contains(groups, any(p.appGroup())) {
+		return fmt.Errorf("%s does not grant the app group %s", profile, p.appGroup())
+	}
+	return nil
+}
+
 // simulatorEntitlements are what an iOS bundle's ad hoc signature claims
 // for the simulator, which grants them from it: the app group the app
-// shares with its extensions. The simulator refuses to launch an app whose ad
-// hoc signature claims a developer entitlement, so the tie between an app
-// and its clip is left to device builds' profiles.
+// shares with its widgets or App Clip. The simulator refuses to launch
+// an app whose ad hoc signature claims a developer entitlement, so the
+// tie between an app and its clip is left to device builds' profiles.
 func (p *project) simulatorEntitlements() map[string]any {
-	if !p.iosExtension() && !p.iosShares() {
+	if !p.needsIOSAppGroup() {
 		return nil
 	}
 	return p.groupEntitlements()
@@ -232,6 +258,9 @@ func signIOSClip(ctx context.Context, p *project, app, identity string) error {
 	if !profileAllows(appID, id) {
 		return fmt.Errorf("sign.clip_profile is for %s, not %s", appID, id)
 	}
+	if err := p.clipProject().checkIOSAppGroup(entitlements, "sign.clip_profile"); err != nil {
+		return err
+	}
 	entitlements["application-identifier"] = signedAppID(appID, id)
 	if _, ok := entitlements["com.apple.developer.parent-application-identifiers"]; !ok {
 		return fmt.Errorf("sign.clip_profile is not an App Clip's: its App ID must be the clip of %s", p.ID)
@@ -270,6 +299,44 @@ func startIOSClip(ctx context.Context, p *project, udid, app, url string, env []
 	return startProcessEnv(append([]string{"SIMCTL_CHILD__XCAppClipURL=" + url}, env...),
 		"xcrun", "simctl", "launch", "--console-pty", "--terminate-running-process", udid, p.AppClip.ID)
 }
+
+// xcodeClipEntitlements associates either a standalone or embedded clip with
+// the same parent. Xcode fills the signing team's AppIdentifierPrefix.
+func (p *project) xcodeClipEntitlements() map[string]any {
+	ents := map[string]any{
+		"com.apple.developer.on-demand-install-capable":      true,
+		"com.apple.developer.parent-application-identifiers": []any{"$(AppIdentifierPrefix)" + p.clipParent},
+	}
+	if p.clipStorageGroup() != "" {
+		ents["com.apple.security.application-groups"] = []any{p.appGroup()}
+	}
+	if domains := p.parentClip.Domains; len(domains) > 0 {
+		ents["com.apple.developer.associated-domains"] = clipDomains(domains)
+	}
+	if p.Apple.SignInWithApple {
+		ents[signInWithAppleEntitlement] = signInWithApple()
+	}
+	return ents
+}
+
+// iosClipSignScript copies the Go-built clip into the product its own target
+// signs. The parent's embedding phase copies that signed product afterward.
+const iosClipSignScript = `set -e
+app="$CODESIGNING_FOLDER_PATH"
+mkdir -p "$app"
+for file in "$SRCROOT/unsigned/AppClips/$FULL_PRODUCT_NAME"/*; do
+	name=$(basename "$file")
+	case "$name" in
+		Info.plist|PkgInfo|_CodeSignature|embedded.mobileprovision) continue ;;
+	esac
+	cp -R "$file" "$app/"
+done
+chmod +x "$app/$EXECUTABLE_NAME"
+for fw in "$app"/Frameworks/*.framework; do
+	[ -d "$fw" ] && codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" "$fw"
+done
+true
+`
 
 // startIOSDeviceClip signs the App Clip of the app built at bundle for
 // device with Xcode, working in work, installs it alone, as Xcode runs a

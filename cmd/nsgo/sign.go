@@ -11,6 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -33,11 +34,12 @@ type signing struct {
 	// Profile is the provisioning profile the iOS package carries and
 	// takes its entitlements from; wildcard profiles sign the app's ID.
 	Profile string `yaml:"profile"`
-	// WidgetsProfile is the provisioning profile of the iOS package's
-	// widget extension, <id>.widgets, granting the app group.
+	// WidgetsProfile is the provisioning profile of an iOS or Mac App Store package's widget extension, <id>.widgets, granting the app group.
 	WidgetsProfile string `yaml:"widgets_profile"`
-	// ShareProfile signs the iOS share extension, <id>.share, with its app group.
+	// ShareProfile signs the iOS share extension.
 	ShareProfile string `yaml:"share_profile"`
+	// AssetPacksProfile signs the iOS Background Assets downloader extension.
+	AssetPacksProfile string `yaml:"asset_packs_profile"`
 	// ClipProfile is the provisioning profile of the iOS package's App
 	// Clip, app_clip.id.
 	ClipProfile string `yaml:"clip_profile"`
@@ -60,8 +62,9 @@ type signing struct {
 	Notarize string `yaml:"notarize"`
 	// Certificate is a Windows code signing certificate: the .pfx (PKCS
 	// #12) whose key and chain sign the executable, the command companion,
-	// the resources' programs and libraries, and the installer and its
-	// uninstaller, which keeps SmartScreen from warning users.
+	// the app's commands, the resources' programs and libraries, and the
+	// installer and its uninstaller, which keeps SmartScreen from warning
+	// users.
 	// NSGO_CERTIFICATE_PASSWORD gives its password. SignCommand signs a
 	// file instead, for a certificate on a hardware token or in a cloud
 	// service, %1 standing for the file's path.
@@ -75,7 +78,6 @@ type signing struct {
 
 // signFlags are nsgo build's flags that replace nsgo.yaml's sign values.
 type signFlags struct {
-	shareProfile                                                 *override[string]
 	identity, profile, widgetsProfile, clipProfile, macOSProfile *override[string]
 	installer                                                    *override[string]
 	keystore, alias, notarize                                    *override[string]
@@ -85,8 +87,7 @@ type signFlags struct {
 func (f *signFlags) bind(fs *flag.FlagSet) {
 	f.identity = stringFlag(fs, "sign", "the macOS and iOS codesign `identity` (default: nsgo.yaml's sign.identity, else ad hoc on macOS and the profile's in the keychain on iOS)")
 	f.profile = stringFlag(fs, "profile", "the iOS provisioning `profile` (default: nsgo.yaml's sign.profile)")
-	f.widgetsProfile = stringFlag(fs, "widgets-profile", "the iOS widget extension's provisioning `profile` (default: nsgo.yaml's sign.widgets_profile)")
-	f.shareProfile = stringFlag(fs, "share-profile", "the iOS share extension's provisioning `profile` (default: nsgo.yaml's sign.share_profile)")
+	f.widgetsProfile = stringFlag(fs, "widgets-profile", "the iOS or Mac App Store widget extension's provisioning `profile` (default: nsgo.yaml's sign.widgets_profile)")
 	f.clipProfile = stringFlag(fs, "clip-profile", "the iOS App Clip's provisioning `profile` (default: nsgo.yaml's sign.clip_profile)")
 	f.macOSProfile = stringFlag(fs, "macos-profile", "the Mac App Store provisioning `profile` (default: nsgo.yaml's sign.macos_profile)")
 	f.installer = stringFlag(fs, "installer", "the Mac Installer Distribution `identity` (default: nsgo.yaml's sign.installer)")
@@ -105,9 +106,6 @@ func (f *signFlags) apply(p *project) {
 	}
 	if f.widgetsProfile.set {
 		p.Sign.WidgetsProfile = p.resolve(f.widgetsProfile.value)
-	}
-	if f.shareProfile.set {
-		p.Sign.ShareProfile = p.resolve(f.shareProfile.value)
 	}
 	if f.clipProfile.set {
 		p.Sign.ClipProfile = p.resolve(f.clipProfile.value)
@@ -148,13 +146,17 @@ func releaseKey(ctx context.Context, p *project) (*apk.Key, error) {
 	return key, nil
 }
 
-// signMacApp signs a macOS package with sign.identity, its libraries and
-// Sparkle first so the app's signature seals them. macOS keeps the permissions it
-// grants a program signed by an identity across builds, and loses them
-// with each new ad hoc signature, which stays without an identity.
+// signMacApp signs a macOS package with sign.identity, its libraries,
+// Sparkle, widgets and commands first so the app's signature seals them.
+// macOS keeps the permissions it grants a program signed by an identity
+// across builds, and loses them with each new ad hoc signature, which
+// stays without an identity.
 func signMacApp(ctx context.Context, p *project, app string) error {
 	if p.Apple.SignInWithApple {
 		warnIn(ctx, "Sign in with Apple is left out: macOS grants it only with a provisioning profile, which only store builds (sign.macos_profile) embed")
+	}
+	if p.cloudEnabled() {
+		warnIn(ctx, "iCloud is left out: macOS grants it only with a provisioning profile, which only store builds (sign.macos_profile) embed")
 	}
 	if p.Sign.Identity == "" {
 		return nil
@@ -175,8 +177,11 @@ func signMacApp(ctx context.Context, p *project, app string) error {
 			return err
 		}
 	}
+	if err := p.signMacCommands(ctx, app, p.macSignArgs); err != nil {
+		return err
+	}
 	args := p.macSignArgs(app)
-	if ents := p.hardenedEntitlements(); p.notarizing() && len(ents) > 0 {
+	if ents := p.macSignEntitlements(); len(ents) > 0 {
 		path, err := writeEntitlements(ents)
 		if err != nil {
 			return err
@@ -185,6 +190,48 @@ func signMacApp(ctx context.Context, p *project, app string) error {
 		args = append(args[:len(args)-1], "--entitlements", path, app)
 	}
 	return run(ctx, "codesign", args...)
+}
+
+// keychainAccessGroupsEntitlement is the entitlement that moves macOS secrets
+// to the data protection keychain for the listed access groups.
+const keychainAccessGroupsEntitlement = "keychain-access-groups"
+
+// macSignEntitlements are the entitlements signMacApp signs a macOS app with:
+// the hardened runtime's when notarizing, and keychain-access-groups from
+// macos.entitlements when signed with an identity (such as a Developer ID), as
+// a Mac App Store build claims it from macos.entitlements.
+func (p *project) macSignEntitlements() map[string]any {
+	ents := map[string]any{}
+	if p.notarizing() {
+		maps.Copy(ents, p.hardenedEntitlements())
+	}
+	if p.Sign.Identity != "" && p.Sign.Identity != "-" {
+		if groups := keychainAccessGroups(p.MacOS.Entitlements[keychainAccessGroupsEntitlement]); len(groups) > 0 {
+			ents[keychainAccessGroupsEntitlement] = groups
+		}
+	}
+	return ents
+}
+
+// keychainAccessGroups normalizes macos.entitlements' keychain-access-groups
+// into the []any of non-empty strings that encodePlist writes.
+func keychainAccessGroups(v any) []any {
+	var groups []any
+	switch v := v.(type) {
+	case []any:
+		for _, item := range v {
+			if s, ok := item.(string); ok && s != "" {
+				groups = append(groups, s)
+			}
+		}
+	case []string:
+		for _, s := range v {
+			if s != "" {
+				groups = append(groups, s)
+			}
+		}
+	}
+	return groups
 }
 
 // macSignArgs are codesign's arguments signing path with sign.identity:
@@ -198,7 +245,7 @@ func (p *project) macSignArgs(path string) []string {
 	return append(args, path)
 }
 
-// hardenedEntitlements are what the hardened runtime denies unless the app claims it, as the Info.plist entries apple.info gives ask for: the microphone, the camera, the calendars, whose entitlement reminders share, and location.
+// hardenedEntitlements are what the hardened runtime denies unless the app claims it, as the Info.plist entries apple.info gives ask for: the microphone, the camera, contacts, the calendars (whose entitlement reminders share), the photo library, location and Apple Events.
 func (p *project) hardenedEntitlements() map[string]any {
 	ents := map[string]any{}
 	described := p.appleInfoDescribes
@@ -208,19 +255,28 @@ func (p *project) hardenedEntitlements() map[string]any {
 	if described("NSCameraUsageDescription") {
 		ents["com.apple.security.device.camera"] = true
 	}
+	if described("NSContactsUsageDescription") {
+		ents["com.apple.security.personal-information.addressbook"] = true
+	}
 	if described("NSCalendarsFullAccessUsageDescription", "NSCalendarsUsageDescription", "NSRemindersFullAccessUsageDescription", "NSRemindersUsageDescription") {
 		ents["com.apple.security.personal-information.calendars"] = true
+	}
+	if described("NSPhotoLibraryUsageDescription") {
+		ents["com.apple.security.personal-information.photos-library"] = true
 	}
 	if described("NSLocationUsageDescription", "NSLocationWhenInUseUsageDescription", "NSLocationAlwaysAndWhenInUseUsageDescription") {
 		ents["com.apple.security.personal-information.location"] = true
 	}
+	if described("NSAppleEventsUsageDescription") {
+		ents["com.apple.security.automation.apple-events"] = true
+	}
 	return ents
 }
 
-// signForStore signs an iOS device build with the project's provisioning
+// signForStore signs an iOS or tvOS device build with the project's provisioning
 // profile, which it embeds and takes the entitlements from. Without a
 // profile the package stays unsigned, for the developer to sign.
-func signForStore(ctx context.Context, p *project, app string) error {
+func signForStore(ctx context.Context, p *project, sys *appleOS, app string) error {
 	if p.Sign.Profile == "" {
 		detailIn(ctx, "unsigned: set sign.profile to install it on devices or upload it")
 		return nil
@@ -244,13 +300,27 @@ func signForStore(ctx context.Context, p *project, app string) error {
 	// Devices refuse an app signed with the wildcard itself, as Xcode
 	// knows: a wildcard profile signs the app's own ID.
 	entitlements["application-identifier"] = signedAppID(appID, p.ID)
-	if groups, _ := entitlements["com.apple.security.application-groups"].([]any); (p.iosExtension() || p.iosShares()) && !slices.Contains(groups, any(p.appGroup())) {
-		return fmt.Errorf("the provisioning profile does not grant the app group %s, which the app shares with its extensions", p.appGroup())
-	}
-	if _, ok := entitlements["com.apple.developer.associated-appclip-app-identifiers"]; p.AppClip != nil && !ok {
-		return fmt.Errorf("the provisioning profile does not tie %s to its App Clip: add the clip's target to the App ID's App Clip capability", p.ID)
+	if sys == iOS {
+		if err := p.checkIOSAppGroup(entitlements, "the provisioning profile"); err != nil {
+			return err
+		}
+		if _, err := os.Stat(assetDownloaderAppex(app)); err == nil {
+			groups, _ := entitlements["com.apple.security.application-groups"].([]any)
+			if !slices.Contains(groups, any(p.appGroup())) {
+				return fmt.Errorf("sign.profile does not grant %s, which the app shares with its Background Assets downloader", p.appGroup())
+			}
+		}
+		if _, ok := entitlements["com.apple.developer.associated-appclip-app-identifiers"]; p.AppClip != nil && !ok {
+			return fmt.Errorf("the provisioning profile does not tie %s to its App Clip: add the clip's target to the App ID's App Clip capability", p.ID)
+		}
 	}
 	if err := p.claimSignInWithApple(entitlements, entitlements); err != nil {
+		return err
+	}
+	if err := p.claimAppLinks(entitlements, entitlements); err != nil {
+		return err
+	}
+	if err := p.claimCloudEntitlements(entitlements, entitlements, teamIDFromEntitlements(entitlements)); err != nil {
 		return err
 	}
 	identity := p.Sign.Identity
@@ -272,13 +342,15 @@ func signForStore(ctx context.Context, p *project, app string) error {
 	if err := signFrameworks(ctx, app, identity); err != nil {
 		return err
 	}
-	if err := signIOSWidgets(ctx, p, app, identity); err != nil {
-		return err
+	if sys == iOS {
+		if err := signIOSWidgets(ctx, p, app, identity); err != nil {
+			return err
+		}
+		if err := signIOSClip(ctx, p, app, identity); err != nil {
+			return err
+		}
 	}
-	if err := signIOSShare(ctx, p, app, identity); err != nil {
-		return err
-	}
-	if err := signIOSClip(ctx, p, app, identity); err != nil {
+	if err := signIOSAssetDownloader(ctx, p, app, identity); err != nil {
 		return err
 	}
 	return run(ctx, "codesign", "--force", "--sign", identity, "--entitlements", ents, "--generate-entitlement-der", app)

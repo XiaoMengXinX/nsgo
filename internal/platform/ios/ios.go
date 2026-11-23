@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"structs"
+	"sync"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -24,6 +25,7 @@ import (
 	"github.com/nsgo-dev/nsgo/internal/platform/imageload"
 	"github.com/nsgo-dev/nsgo/internal/platform/objcblock"
 	"github.com/nsgo-dev/nsgo/internal/platform/queue"
+	"github.com/nsgo-dev/nsgo/internal/platform/scrollbar"
 	"github.com/nsgo-dev/nsgo/internal/platform/updates"
 	"github.com/nsgo-dev/nsgo/internal/testhost"
 )
@@ -54,11 +56,11 @@ type view struct {
 	rasterStep float64
 	// axNodes are a canvas's named parts, its accessibility elements.
 	axNodes []objc.ID
-	// backdrop is the view's backdrop: a UIVisualEffectView for backdropMaterial
-	// or backdropGlass, or a holder UIView of backdropLayer (a CABackdropLayer)
-	// and tint for backdropFiltered.
-	backdrop, backdropLayer, tint objc.ID
-	backdropKind                  backdropMode
+	// backdrop is the view's backdrop: a UIVisualEffectView for backdropMaterial or backdropGlass, or a holder UIView of backdropLayer (a CABackdropLayer) and tintView for backdropFiltered.
+	backdrop, backdropLayer, tintView objc.ID
+	backdropKind                      backdropMode
+	glassInteractive                  bool
+	backdropTint                      apple.BackdropTint
 
 	pressing  atomic.Bool
 	longFired atomic.Bool
@@ -75,9 +77,10 @@ type view struct {
 	input *input       // an input's editor
 	inset driver.Bounds
 
-	image     *apple.ImageView
-	modal     driver.ModalConfig // a modal's
-	presented bool               // whether a modal was inserted yet
+	image          *apple.ImageView
+	modal          driver.ModalConfig // a modal's
+	presented      bool               // whether a modal was inserted yet
+	modalDismissed bool               // whether EventModalDismissed was reported
 	// focusBefore is what had the focus as a modal came (focus.go).
 	focusBefore *view
 	sheet       *sheet  // a modal presented as a sheet
@@ -87,6 +90,7 @@ type view struct {
 	drawing    *driver.Drawing    // a canvas's
 	played     []driver.DrawOp    // the ops it last drew, its bound arguments' values in place
 	shader     *apple.ShaderLayer // a shader view's (shader.go)
+	gpu        *apple.GPULayer    // a GPU view's (gpu.go)
 	container  objc.ID            // what holds its children under an effect or for its clip, once it has one
 	clipHeld   bool               // whether container clips the children in place of the view's own layer, which keeps its shadow and outline (clipsInHolder)
 	web        *apple.Web         // a web view's
@@ -94,9 +98,10 @@ type view struct {
 	video      *apple.Video // a video's
 
 	activation           driver.PanActivation
-	handoff              bool    // its pan hands off from the scroll views inside it
-	pan, pinch, rotation objc.ID // the recognizers of the gestures it follows
-	hover                objc.ID // its UIHoverGestureRecognizer while it follows hovers
+	handoff              bool         // its pan hands off from the scroll views inside it
+	pan, pinch, rotation objc.ID      // the recognizers of the gestures it follows
+	pinchAt              driver.Point // last valid pinch center in view points
+	hover                objc.ID      // its UIHoverGestureRecognizer while it follows hovers
 	// scrolls and notches are its scroll-only pans while it takes the
 	// wheel: a trackpad's two fingers and a mouse wheel's turns.
 	scrolls, notches objc.ID
@@ -121,11 +126,13 @@ type view struct {
 
 	// frame is where the view shows now; style its own style, which its
 	// animated values and a layout animation draw over.
-	frame    driver.Bounds
-	framed   bool
-	shift    driver.Point // a sticky cell's, from frame
-	style    driver.ViewStyle
-	animated driver.AnimatedValues
+	frame       driver.Bounds
+	framed      bool
+	shift       driver.Point // a sticky cell's, from frame
+	style       driver.ViewStyle
+	animated    driver.AnimatedValues
+	bound       uint16
+	transformTr *driver.StyleTransition
 	// drawn is the style its layer was last drawn with, once styled, and
 	// the default style before. born is the batch that created it, whose
 	// style shows at once.
@@ -146,10 +153,13 @@ type surface struct {
 	// shareWake schedules the App Group inbox when the containing app activates.
 	shareWake func()
 
+	// gpuLayers are the GPU views' layers by view, which the engine goroutine submits frames to.
+	gpuLayers sync.Map
 	sensors   apple.Sensors
 	discovery apple.Discovery
 
-	batch uint64 // batches applied
+	batch       uint64 // batches applied
+	devGeometry driver.GeometryObserver
 	// hinge is the latest a UIHingeInteraction reported (watchHinge).
 	hinge hingeReading
 	// regionClock follows the sizes the reserved regions are read at (geometry).
@@ -169,11 +179,13 @@ type surface struct {
 	stops        []func()
 	closed       bool
 	gestureEdges driver.SystemGestureEdge
+	appClipOffer appClipOffer
 	// A standalone app's scene (sceneWillConnect): window is the UIWindow it shows in, 0 while its scene is disconnected, and controller its root view controller. session is the persistent identifier of the scene session it shows, "" once the system discarded it. scene numbers a scene beyond the first for the tree the engine opens it (EventOpenScene), and tree is that tree's ID once attached; ending says the engine destroyed the tree.
 	window, controller objc.ID
 	session            string
 	scene, tree        uint32
 	discarded, ending  bool
+	test               *testOpen
 	// alerts are the alerts shown, by ID, kept for a test host or nsgo dev's
 	// automation to answer them.
 	alerts map[uint32]shownAlert
@@ -188,22 +200,28 @@ type surface struct {
 	rtl, directed bool
 	// stickyBound are the scroll views with sticky cells whose insets
 	// follow animated values.
-	stickyBound map[*view]bool
-	app         engine.App
-	id          string
-	native      objc.ID
-	engine      *engine.Engine
-	audio       *apple.Audio // the engine's sounds and players, made with its first ItemAudio and closed with the surface
-	batches     queue.Batches
-	views       []*view // index is NodeID
-	pips        []*view // the views of mobile.PictureInPicture trees, which draw into their sessions' frames
-	fingers     fingers // the touches reported
-	env         driver.Environment
+	stickyBound     scrollbar.StickyBindings[*view]
+	app             engine.App
+	id              string
+	native          objc.ID
+	engine          *engine.Engine
+	audio           *apple.Audio // the engine's sounds and players, made with its first ItemAudio and closed with the surface
+	batches         queue.Batches
+	views           []*view // index is NodeID
+	pips            []*view // the views of mobile.PictureInPicture trees, which draw into their sessions' frames
+	videos          []*view
+	pipTimer        *time.Timer
+	pipFramePending bool
+	fingers         fingers // the touches reported
+	env             driver.Environment
+	envPin          func(driver.Environment) driver.Environment
 
 	// resizedScrolls are checked after the current batch or animation step.
 	resizedScrolls []*view
 
 	keyboard driver.Points
+	// keyboardFrame is the last notified frame in the screen's coordinates; layout reprojects it as a scene or an embedded surface moves or resizes.
+	keyboardFrame apple.CGRect
 	// keyboardScroll is the scroll view keeping the focused input clear
 	// of the keyboard (keyboard.go).
 	keyboardScroll   *view
@@ -224,6 +242,7 @@ type surface struct {
 	menuHeld    bool
 	statusBar   int // the UIStatusBarStyle the controller asks for
 	hideBar     bool
+	hideHome    bool
 	barAnimated bool
 	// headers are the navigation bar's heights; oriented the modals
 	// that limit the orientations, in the order they were presented.
@@ -240,11 +259,9 @@ type surface struct {
 	changes []stackChange
 	// history is how many entries back goes through (ItemHistory).
 	history int
-	// On an Apple TV (focus.go): modals are those shown, oldest first;
-	// focused is the view with the focus, focusBack the one to give it
-	// back to as a modal goes.
-	modals             []*view
-	focused, focusBack *view
+	// modals are those shown, oldest first; topmostCaptures are input-capturing Topmost overlays shown, oldest first; focusScope is the active capture overlay or modal (on an Apple TV); focused is the explicitly focused view, or tvOS focus engine's, and focusBack the one to give it back to as a scope goes.
+	modals, topmostCaptures        []*view
+	focusScope, focused, focusBack *view
 
 	// What a batch touched, finished once its frames are set.
 	images, presenting []*view
@@ -265,14 +282,19 @@ type surface struct {
 	link     objc.ID // the CADisplayLink
 	ticking  bool
 	// pace is the rate the link is slowed to, 0 for the screen's highest.
-	pace float64
+	pace                       float64
+	preferredRate, appliedRate apple.CAFrameRateRange
+	appliedFPS                 int
+	// borrowedFrames names scenes borrowing this one's foreground clock.
+	borrowedFrames []*surface
 	// frameWanted is set while the app waits for a display frame, by the
 	// engine goroutine; fullRate while the clock ticks at the display's
 	// full rate, which serves it without a hop to the main thread.
 	frameWanted atomic.Bool
 	fullRate    atomic.Bool
-	motions     map[*view]*motion
-	ghosts      []*ghost
+	motions     map[*view]*apple.LayoutMotion
+	transitions map[*view]bool
+	ghosts      []*apple.LayoutGhost
 	components  driver.NativeComponents
 	unknown     map[string]bool
 	// accessories are the inputs each InputAccessoryView rides above.
@@ -375,18 +397,12 @@ func loadUIKit() {
 	registerSelection()
 	registerContent()
 	registerCanvasNodes()
-	classView = register("NsgoView", uiView, nil, slices.Concat(common, pressMethods()))
+	classView = register("NsgoView", uiView, nil, slices.Concat(common, pressMethods(), keyboardResponderMethods()))
 	registerTextInput(slices.Concat(common, pressMethods()))
 	surfaceMethods = append(common,
 		objc.MethodDef{Cmd: sel("layoutSubviews"), Fn: surfaceLayout},
 		objc.MethodDef{Cmd: selApply, Fn: surfaceApply},
 		objc.MethodDef{Cmd: selTick, Fn: surfaceTick},
-		objc.MethodDef{Cmd: sel("safeAreaInsetsDidChange"), Fn: func(self objc.ID, cmd objc.SEL) {
-			apple.Super(self, cmd)
-			if v := views[self]; v != nil {
-				v.surface.layoutChanged()
-			}
-		}},
 		objc.MethodDef{Cmd: sel("traitCollectionDidChange:"), Fn: func(self objc.ID, cmd objc.SEL, previous objc.ID) {
 			apple.Super(self, cmd, previous)
 			if v := views[self]; v != nil {
@@ -397,6 +413,15 @@ func loadUIKit() {
 	classSurface = register("NsgoSurface", uiView, nil, surfaceMethods)
 	classWindow = register("NsgoWindow", apple.Class("UIWindow"), nil, []objc.MethodDef{
 		{Cmd: sel("nsgoKeyboardWindow:"), Fn: func(self objc.ID, _ objc.SEL, _ objc.ID) { keyboardWindow = self }},
+		{Cmd: sel("sendEvent:"), Fn: func(self objc.ID, cmd objc.SEL, event objc.ID) {
+			if !iosInputAllowed(self, event) {
+				return
+			}
+			apple.Super(self, cmd, event)
+			if onWindowEvent != nil {
+				onWindowEvent(self, event)
+			}
+		}},
 	})
 	classController = register("NsgoViewController", apple.Class("UIViewController"), nil, append(keyCommandMethods(), []objc.MethodDef{
 		{Cmd: sel("preferredScreenEdgesDeferringSystemGestures"), Fn: func(self objc.ID, _ objc.SEL) uint {
@@ -407,6 +432,7 @@ func loadUIKit() {
 		}},
 		{Cmd: sel("preferredStatusBarStyle"), Fn: func(self objc.ID, _ objc.SEL) int { return controllerSurface(self).statusBar }},
 		{Cmd: sel("prefersStatusBarHidden"), Fn: func(self objc.ID, _ objc.SEL) bool { return controllerSurface(self).hideBar }},
+		{Cmd: sel("prefersHomeIndicatorAutoHidden"), Fn: func(self objc.ID, _ objc.SEL) bool { return controllerSurface(self).hideHome }},
 		{Cmd: sel("preferredStatusBarUpdateAnimation"), Fn: func(self objc.ID, _ objc.SEL) int { return controllerSurface(self).barAnimation() }},
 		{Cmd: sel("supportedInterfaceOrientations"), Fn: func(self objc.ID, cmd objc.SEL) uint {
 			if m := controllerSurface(self).orientations(); m != 0 {
@@ -445,6 +471,7 @@ func loadUIKit() {
 				// Before it returns, so a press that launched the app is
 				// heard.
 				apple.WatchNotifications()
+				configureDownloads()
 				return true
 			}},
 			// iOS ends the app, as the user swipes it away while it runs:
@@ -457,6 +484,11 @@ func loadUIKit() {
 			}},
 			{Cmd: sel("application:didDiscardSceneSessions:"), Fn: func(self objc.ID, _ objc.SEL, application, sessions objc.ID) {
 				apple.ForEach(sessions, func(session objc.ID) { discardScene(sessionID(session)) })
+			}},
+			{Cmd: sel("application:handleEventsForBackgroundURLSession:completionHandler:"), Fn: func(_ objc.ID, _ objc.SEL, _, identifier, completion objc.ID) {
+				if !apple.HandleDownloadEvents(apple.GoString(identifier), completion) {
+					apple.CallBlock(completion)
+				}
 			}},
 			{Cmd: sel("buildMenuWithBuilder:"), Fn: buildKeyMenus},
 		})
@@ -503,7 +535,7 @@ func Run(root engine.App, opts Options) {
 // newSurface is the surface the scene shows root in; a test host's has no
 // root until the test opens one.
 func newSurface(root engine.App, opts Options) *surface {
-	s := &surface{app: root, id: opts.ID, epoch: time.Now(), motions: map[*view]*motion{}, tops: map[*view]*view{}, slides: map[*view]*slide{}, appearance: opts.Appearance,
+	s := &surface{app: root, id: opts.ID, epoch: time.Now(), motions: map[*view]*apple.LayoutMotion{}, tops: map[*view]*view{}, slides: map[*view]*slide{}, appearance: opts.Appearance,
 		components: opts.Components, unknown: map[string]bool{}, accessories: map[driver.NodeID]*view{}, ownTexts: map[driver.NodeID]*view{},
 		perfOn: opts.Perf}
 	if automationBuild {
@@ -534,6 +566,7 @@ func sceneWillConnect(self objc.ID, _ objc.SEL, scene, session, options objc.ID)
 		s = runner
 	default:
 		s = newSurface(runner.app, Options{ID: runner.id, Components: runner.components, Appearance: runner.appearance})
+		s.test = runner.test
 		scenes = append(scenes, s)
 	}
 	s.session, s.discarded = id, false
@@ -629,7 +662,6 @@ func attachScene(cfg driver.SurfaceConfig) {
 	s.env = s.environment()
 	s.engine.ResizeWithEnvironment(size, s.geometry(size), s.env)
 	s.observe()
-	s.observeShares()
 	if s.frameWanted.Load() || s.animator.Running() {
 		s.startTicking()
 	}
@@ -668,12 +700,14 @@ func (s *surface) endScene() {
 
 // detach takes the surface view out of its scene's window and lets the window go.
 func (s *surface) detach() {
+	s.dismissAppClipOverlay()
 	if s.window == 0 {
 		return
 	}
 	s.dropLink()
 	w := s.window
 	s.window = 0
+	s.keyboardFrame = apple.CGRect{}
 	s.setKeyboard(0, 0)
 	w.Send(selSetHidden, true)
 	w.Send(sel("setRootViewController:"), objc.ID(0))
@@ -695,8 +729,9 @@ func (s *surface) reconnect(scene objc.ID) {
 	}
 	if runner.engine != nil {
 		runner.sendLaunchLinks()
+		runner.sendLaunchFiles()
 	}
-	if s.perf != nil || s.frameWanted.Load() || s.animator.Running() || len(s.motions) > 0 {
+	if s.perf != nil || s.frameWanted.Load() || s.animator.Running() || len(s.motions) > 0 || len(s.transitions) > 0 {
 		s.startTicking()
 	}
 }
@@ -723,6 +758,8 @@ var sceneReady chan struct{}
 func (s *surface) startEngine(test *testOpen) {
 	bounds := objc.Send[apple.CGRect](s.native, selBounds)
 	opts := engine.Options{
+		ReadAsset:      imageload.ReadAsset,
+		Updater:        updateConfig.State(true),
 		Size:           driver.Size{Width: driver.Points(bounds.Size.Width), Height: driver.Points(bounds.Size.Height)},
 		Environment:    s.env,
 		NetworkWatcher: apple.NetworkWatcher{},
@@ -731,10 +768,12 @@ func (s *surface) startEngine(test *testOpen) {
 		Host:           s.host,
 		Secrets:        apple.Keychain{},
 	}
-	opts.SetDirs(engine.AppDirs(s.id))
+	opts.SetDirs(appDirs(s.id, s.host.DataDir))
+	s.test = test
 	if test != nil {
 		size := opts.Size
 		opts.UseTest(test.options, &test.pin)
+		s.envPin = opts.Pin
 		// A phone's screen is what it is.
 		opts.Size = size
 		s.alerts = map[uint32]shownAlert{}
@@ -753,8 +792,8 @@ func (s *surface) startEngine(test *testOpen) {
 	apple.SetNotificationPress(func(id string) { e.Dispatch(driver.Event{Kind: driver.EventNotificationPress, Text: id}) })
 	apple.SetPurchaseUpdates(e.Dispatch)
 	s.sendLaunchLinks()
+	s.sendLaunchFiles()
 	s.observe()
-	s.observeShares()
 	// Scenes that connected before the engine started, as iPadOS restores a test host's, open their trees now.
 	for _, o := range scenes {
 		if o.scene != 0 && o.engine == nil {
@@ -804,9 +843,12 @@ func (s *surface) environment() driver.Environment {
 	locale, rtl := apple.Locale()
 	deviceName, deviceModel := deviceIdentity()
 	thermal, lowPower := apple.ProcessPower()
+	displays, displayID := s.displaySnapshot()
 	env := driver.Environment{
 		DeviceName:  deviceName,
 		DeviceModel: deviceModel,
+		Displays:    displays,
+		DisplayID:   displayID,
 		SafeArea: driver.Edges{Top: driver.Points(in.Top), Right: driver.Points(in.Right),
 			Bottom: driver.Points(in.Bottom), Left: driver.Points(in.Left)},
 		KeyboardHeight:   s.keyboard,
@@ -823,29 +865,28 @@ func (s *surface) environment() driver.Environment {
 		OS:               driver.OSIOS,
 		OSVersion:        osVersion(),
 		Idiom:            idiom,
-		DiscoverServices: idiom != driver.IdiomTV,
-		Speech:           apple.SpeechAvailable(),
-		Speak:            apple.SpeakAvailable(),
-		Audio:            idiom != driver.IdiomTV && apple.AudioAvailable(), // none on tvOS in the first stages (docs/architecture/audio.md)
 		Gamepads:         true,
-		AudioSchedule:    idiom != driver.IdiomTV && apple.AudioAvailable(),
-		Camera:           cameraAvailable(),
-		ScanCode:         cameraAvailable() && idiom != driver.IdiomTV,
-		CanSendInput:     false,
-		HasWebView:       idiom != driver.IdiomTV,
-		SignInWithApple:  apple.AppleSignInAvailable(),
-		Purchases:        apple.PurchasesAvailable(),
 		CanRequestReview: !onTV() && apple.ReviewAvailable(),
+		CloudStorage:     apple.CloudStorageAvailable(),
 		VerticalBarEdge:  verticalBarEdge(traits),
 		Lifecycle:        appLifecycle(),
 		ThermalState:     thermal,
 		LowPowerMode:     lowPower,
 		AppClip:          appClip(),
 		OpenedURL:        openedURL,
-
-		// tvOS's center shows badges only.
-		ScheduledNotifications: idiom != driver.IdiomTV && apple.NotificationsAvailable(),
 	}
+	applyCapabilities(&env, idiom, capabilities{
+		speech:        apple.SpeechAvailable(),
+		speak:         apple.SpeakAvailable(),
+		audio:         apple.AudioAvailable(),
+		camera:        cameraAvailable(),
+		signInApple:   apple.AppleSignInAvailable(),
+		purchases:     apple.PurchasesAvailable(),
+		notifications: apple.NotificationsAvailable(),
+		gpu:           apple.GPUSupported(),
+	})
+	env.HapticPatterns = idiom != driver.IdiomTV && hapticPatternsAvailable()
+	env.CanUseGameServices = apple.GameServicesAvailable()
 	env.HeaderHeight, env.LargeHeaderHeight = s.headers[0], s.headers[1]
 	return env
 }
@@ -908,22 +949,29 @@ func (s *surface) observe() {
 	on := func(name objc.ID, fn func(objc.ID)) { s.stops = append(s.stops, apple.Observe(center, name, fn)) }
 	for _, name := range []string{"UIContentSizeCategoryDidChangeNotification",
 		"UIAccessibilityReduceMotionStatusDidChangeNotification", "UIAccessibilityDarkerSystemColorsStatusDidChangeNotification",
-		"UIAccessibilityVoiceOverStatusDidChangeNotification"} {
+		"UIAccessibilityVoiceOverStatusDidChangeNotification", "UIScreenModeDidChangeNotification",
+		"UIScreenDidConnectNotification", "UIScreenDidDisconnectNotification"} {
 		on(apple.Global(uikitPath, name), refresh)
 	}
 	for name, state := range lifecycleNote {
 		on(apple.Global(uikitPath, name), func(objc.ID) {
 			lifecycleNow = state
-			if state == driver.LifecycleActive && s.shareWake != nil {
-				s.shareWake()
-			}
 			if name == "UIApplicationWillResignActiveNotification" {
 				// The keys held come up for the app: UIKit may end their presses elsewhere, or not at all.
 				s.releaseKeys()
 			}
+			if state == driver.LifecycleBackground {
+				s.stopHapticPattern()
+			}
 			// Players pause as the app leaves the foreground, as NSH's do.
 			if state == driver.LifecycleBackground && s.audio != nil {
 				s.audio.PausePlayers()
+			}
+			if state == driver.LifecycleBackground {
+				s.wakePictureInPictures()
+			} else if name == "UIApplicationWillEnterForegroundNotification" {
+				s.stopPictureInPictureTimer()
+				s.dirtyPictureInPictures()
 			}
 			s.refresh()
 		})
@@ -1069,6 +1117,11 @@ func watcherBegan(self objc.ID, cmd objc.SEL, touches, event objc.ID) {
 	apple.Super(self, cmd, touches, event)
 	if v := views[self.Send(sel("view"))]; v != nil && v.surface.engine != nil {
 		s := v.surface
+		if !iosInputAllowed(s.window, event) {
+			const failed = 5
+			self.Send(sel("setState:"), failed)
+			return
+		}
 		s.engine.InputModality(driver.ModalityPointer)
 		apple.ForEach(touches, s.pressOutside)
 		apple.ForEach(touches, s.clearTouched)
@@ -1095,6 +1148,14 @@ func (s *surface) Mount(b *driver.MountBatch) {
 	}
 }
 
+// SetPreferredFrameRate updates the surface's display link on the main thread.
+func (s *surface) SetPreferredFrameRate(rate driver.FrameRateRange) {
+	apple.OnMain(func() {
+		s.preferredRate = apple.CAFrameRateRange(rate)
+		s.applyFrameRate()
+	})
+}
+
 // RequestFrame implements engine.Platform: the app waits for the next
 // display frame. Called from the engine goroutine, it hops to the main
 // thread, where the display link lives, only to start the clock or bring
@@ -1107,16 +1168,16 @@ func (s *surface) RequestFrame() {
 	}
 }
 
-func (s *surface) SubmitGPU(driver.GPUFrame) {}
-
-// frameClock starts the clock that serves a frame the engine asked s for: s's own, or, for a standalone app's scene that shows in no foreground window, that of one that does, since the engine asks one of its surfaces for the frames of all their trees.
+// frameClock starts the surface's display link. A background scene
+// can borrow a foreground scene's tick while its own link is stopped.
 func (s *surface) frameClock() {
 	if !s.embedded && !s.foreground() {
-		for _, o := range scenes {
-			if o.foreground() && o.engine != nil {
-				s.frameWanted.Store(false)
-				o.frameWanted.Store(true)
-				o.startTicking()
+		for _, other := range scenes {
+			if other.foreground() && other.engine != nil {
+				if !slices.Contains(other.borrowedFrames, s) {
+					other.borrowedFrames = append(other.borrowedFrames, s)
+				}
+				other.startTicking()
 				return
 			}
 		}
@@ -1135,6 +1196,8 @@ func (s *surface) foreground() bool {
 }
 
 func (s *surface) apply(b *driver.MountBatch) {
+	s.devGeometry.Begin(b.GeometryVersion)
+	defer func() { s.devGeometry.End(); s.reportGeometry() }()
 	var restored []func()
 	keysChanged := false
 	defer func() {
@@ -1144,8 +1207,8 @@ func (s *surface) apply(b *driver.MountBatch) {
 	}()
 	s.batch++
 	var lb *layoutBatch
-	if b.LayoutAnimation != nil && !s.env.ReduceMotion {
-		lb = &layoutBatch{anim: b.LayoutAnimation, created: map[driver.NodeID]bool{}, deleted: map[objc.ID]bool{}}
+	if b.LayoutAnimation != nil && !s.motionReduced() {
+		lb = &layoutBatch{Animation: b.LayoutAnimation, Created: map[driver.NodeID]bool{}, Deleted: map[objc.ID]bool{}}
 	}
 	s.coverScreens(b.Items)
 	for i := range b.Items {
@@ -1157,7 +1220,7 @@ func (s *surface) apply(b *driver.MountBatch) {
 			}
 			s.views[it.ID] = s.create(it.View, it.ID)
 			if lb != nil {
-				lb.created[it.ID] = true
+				lb.Created[it.ID] = true
 			}
 			continue
 		case driver.ItemPictureInPictureCommand:
@@ -1194,7 +1257,13 @@ func (s *surface) apply(b *driver.MountBatch) {
 			apple.HandleSpeech(it.Count, *it.Speech, s.engine.Dispatch)
 			continue
 		case driver.ItemAuthSession:
-			apple.HandleAuthSession(it.Count, *it.Auth, s.uiWindow, s.engine.Dispatch)
+			if onTV() {
+				if ev, ok := driver.NoAuthSession(it); ok {
+					s.engine.Dispatch(ev)
+				}
+			} else if it.Auth != nil {
+				apple.HandleAuthSession(it.Count, *it.Auth, s.uiWindow, s.engine.Dispatch)
+			}
 			continue
 		case driver.ItemSpeak:
 			apple.HandleSpeak(it.Count, *it.Speak, s.engine.Dispatch)
@@ -1209,7 +1278,9 @@ func (s *surface) apply(b *driver.MountBatch) {
 			s.audio.Handle(it.Count, it.Audio)
 			continue
 		case driver.ItemSetClipboard:
-			objc.ID(apple.Class("UIPasteboard")).Send(sel("generalPasteboard")).Send(sel("setString:"), apple.NSString(it.Value))
+			if pasteboard := generalPasteboard(); pasteboard != 0 {
+				pasteboard.Send(sel("setString:"), apple.NSString(it.Value))
+			}
 			continue
 		case driver.ItemReadClipboard:
 			s.readClipboard(it)
@@ -1233,6 +1304,9 @@ func (s *surface) apply(b *driver.MountBatch) {
 				s.setSystemGestureEdges(it.SystemGestures.IOSEdges)
 			}
 			continue
+		case driver.ItemHapticPattern:
+			s.playHapticPattern(it.HapticPattern)
+			continue
 		case driver.ItemKeepAwake:
 			if it.Awake != nil && !s.closed {
 				s.keepAwake(it.Count, *it.Awake)
@@ -1255,12 +1329,15 @@ func (s *surface) apply(b *driver.MountBatch) {
 			apple.HandleAppleSignIn(it, s.native.Send(sel("window")), s.engine.Dispatch)
 			continue
 		case driver.ItemPurchase:
-			apple.HandlePurchase(it, s.engine.Dispatch)
+			apple.HandlePurchase(it, s.activeWindowScene(), s.engine.Dispatch)
 			continue
 		case driver.ItemRequestReview:
 			if !onTV() {
 				apple.RequestReview(s.activeWindowScene())
 			}
+			continue
+		case driver.ItemAppClipOverlay:
+			s.appClipOverlay(*it)
 			continue
 		case driver.ItemCheckForUpdates:
 			s.checkForUpdates(it.Count)
@@ -1288,6 +1365,9 @@ func (s *surface) apply(b *driver.MountBatch) {
 			continue
 		case driver.ItemInstallPackage:
 			s.engine.Dispatch(driver.NoPackageInstaller(it.Count))
+			continue
+		case driver.ItemCapture:
+			s.capture(it.ID, it.Count)
 			continue
 		case driver.ItemShare:
 			s.share(*it.Share, it.Count)
@@ -1329,6 +1409,9 @@ func (s *surface) apply(b *driver.MountBatch) {
 			continue
 		case driver.ItemReleaseImage:
 			apple.ReleaseCanvasImage(s, it.Value)
+			continue
+		case driver.ItemImageCacheLimit:
+			apple.SetImageCacheLimit(it.Bytes)
 			continue
 		case driver.ItemAnnounce:
 			uiAccessibilityPost(announcement, apple.NSString(it.Value))
@@ -1401,6 +1484,7 @@ func (s *surface) apply(b *driver.MountBatch) {
 			if v.bar != nil {
 				s.touchStack(s.stackOf(v))
 				s.touchStack(s.views[it.Parent])
+				s.reportScreenInsets(v)
 			}
 			parent := s.views[it.Parent].children()
 			if it.Before == 0 {
@@ -1439,21 +1523,18 @@ func (s *surface) apply(b *driver.MountBatch) {
 			if v.bar != nil && it.ViewStyle.Hidden != v.style.Hidden {
 				s.touchStack(s.stackOf(v))
 			}
+			prev := v.style
 			v.style = *it.ViewStyle
 			v.setBackdrop(it.ViewStyle)
-			if v.animatesStyle() {
-				v.restyle()
-			} else {
-				v.styleLayer(it.ViewStyle)
-			}
+			v.updateTransformTransition(prev)
+			v.restyleWith(true)
 			if v.layout != nil {
 				// A rounded text's layer takes its exact frame (sizeContent).
 				v.sizeContent()
 			}
 			v.native.Send(selSetHidden, it.ViewStyle.Hidden)
-			if v.kind == driver.KindScroll || v.kind == driver.KindVideo {
-				// A scroll view shows only what it scrolls to, and a video
-				// only its frame.
+			if (v.kind == driver.KindScroll || v.kind == driver.KindVideo) && !v.clipsInHolder(it.ViewStyle) {
+				// A scroll view shows only what it scrolls to, and a video only its frame, unless a holder clips them for their decoration.
 				v.native.Send(sel("setClipsToBounds:"), true)
 			}
 			if v.image != nil {
@@ -1468,8 +1549,18 @@ func (s *surface) apply(b *driver.MountBatch) {
 				s.oriented = append(s.oriented, v)
 			}
 		case driver.ItemWeb:
+			if onTV() {
+				v.report(driver.Event{Kind: driver.EventError, Text: "Web views are unavailable on tvOS", Navigation: &driver.WebNavigation{URL: it.Web.Source.Src}})
+				break
+			}
 			v.web.Configure(it.Web)
 		case driver.ItemWebCommand:
+			if in, ok := it.Data.(*driver.WebInput); ok && it.WebCommand == driver.WebSendInput {
+				if web := v.web.View(); web != 0 {
+					sendWebInput(web, *in)
+				}
+				break
+			}
 			v.web.Command(it.WebCommand, it.Value, it.Data)
 		case driver.ItemPictureInPicture:
 			if v.pip == nil {
@@ -1499,6 +1590,10 @@ func (s *surface) apply(b *driver.MountBatch) {
 			s.animator.BindCanvas(v.id, it.Drawing.Slots)
 			v.setCanvasNodes(it.Drawing.Nodes)
 			v.redraw()
+		case driver.ItemGPU:
+			if v.kind == driver.KindGPU && it.GPU != nil && s.env.GPU {
+				v.newGPU(*it.GPU)
+			}
 		case driver.ItemShader:
 			if v.kind == driver.KindShader && it.Shader != nil && it.Shader.Role == driver.ShaderFill {
 				s.setShader(v, it.Shader)
@@ -1513,6 +1608,10 @@ func (s *surface) apply(b *driver.MountBatch) {
 				s.shadeLater(v)
 			}
 		case driver.ItemScrollTo:
+			if v.input != nil {
+				v.scrollInputTo(it.Point, it.Animated)
+				break
+			}
 			start, end := scrollLimits(v.native)
 			to := apple.CGPoint{
 				X: min(max(float64(it.Point.X), start.X), end.X),
@@ -1534,6 +1633,14 @@ func (s *surface) apply(b *driver.MountBatch) {
 		case driver.ItemViewProps:
 			v.setProps(it.ViewProps)
 			p := it.ViewProps
+			if isTopmostCaptureProps(v.props) {
+				if !slices.Contains(s.topmostCaptures, v) {
+					v.focusBefore = s.focused
+					s.topmostCaptures = append(s.topmostCaptures, v)
+				}
+			} else if len(s.topmostCaptures) > 0 {
+				s.topmostCaptures = slices.DeleteFunc(s.topmostCaptures, func(o *view) bool { return o == v })
+			}
 			v.activation, v.handoff, v.area, v.selectable = p.PanActivation, p.PanScrollHandoff, p.SelectionArea, p.Selectable
 			if v.selColor != p.SelectionColor {
 				v.selColor = p.SelectionColor
@@ -1577,6 +1684,14 @@ func (s *surface) apply(b *driver.MountBatch) {
 			if v.input != nil {
 				v.input.setSelection(it.Selection)
 			}
+		case driver.ItemEditMenu:
+			if v.input != nil && !onTV() {
+				if it.Count == 0 {
+					v.input.closeEditMenu()
+				} else {
+					v.openEditMenu(it.Frame, driver.EditAction(it.Count))
+				}
+			}
 		case driver.ItemScrollConfig:
 			if v.sc != nil {
 				v.configureScroll(it.Scroll)
@@ -1596,12 +1711,16 @@ func (s *surface) apply(b *driver.MountBatch) {
 		case driver.ItemBlur:
 			if v.input != nil {
 				v.input.field.Send(selResign)
+			} else if !onTV() && s.focused == v {
+				v.native.Send(selResign)
+				s.viewController().Send(selBecomeFirst)
 			}
 		}
 	}
 	s.root = b.Root
 	if root := s.views[b.Root]; root.native.Send(selSuperview) != s.native {
 		s.native.Send(selAddSubview, root.native)
+		s.directTree(root.native)
 	}
 	s.slideStacks()
 	s.finish()
@@ -1620,8 +1739,9 @@ func (s *surface) apply(b *driver.MountBatch) {
 		s.applyAnimated()
 	})
 	s.drawShaders()
+	s.updatePictureInPictureVideos()
 	s.dirtyPictureInPictures()
-	if s.animator.Running() {
+	if s.animator.Running() || len(s.transitions) > 0 {
 		s.startTicking()
 	}
 }
@@ -1631,10 +1751,24 @@ func (s *surface) apply(b *driver.MountBatch) {
 func (s *surface) finish() {
 	s.startImages()
 	s.updateModals()
+	if v := s.focused; !onTV() && v != nil && !v.focusable() {
+		v.native.Send(selResign)
+		s.viewController().Send(selBecomeFirst)
+	}
 	for _, v := range s.presenting {
-		if s.views[v.id] == v && v.native.Send(selSuperview) != 0 && !s.navigating(s.views[s.root]) {
-			h := objc.Send[apple.CGRect](v.native.Send(selSuperview), selBounds).Size.Height
-			apple.AnimateIn(v.native.Send(selLayer), v.modal.Animation, h, s.env.ReduceMotion)
+		if s.views[v.id] == v && v.native.Send(selSuperview) != 0 {
+			id := v.id
+			shown := func() {
+				if int(id) < len(s.views) && s.views[id] == v && !v.modalDismissed {
+					s.engine.Dispatch(driver.Event{Kind: driver.EventModalShown, ID: id})
+				}
+			}
+			if s.navigating(s.views[s.root]) {
+				shown()
+			} else {
+				h := objc.Send[apple.CGRect](v.native.Send(selSuperview), selBounds).Size.Height
+				apple.AnimateIn(v.native.Send(selLayer), v.modal.Animation, h, s.motionReduced(), shown)
+			}
 		}
 	}
 	clear(s.presenting)
@@ -1644,13 +1778,9 @@ func (s *surface) finish() {
 // startImages starts the image loads a batch or a frame's layout asked
 // for, at the views' new sizes.
 func (s *surface) startImages() {
-	for _, v := range s.images {
-		if s.views[v.id] == v {
-			v.image.Start(float64(s.env.PixelRatio))
-		}
-	}
-	clear(s.images)
-	s.images = s.images[:0]
+	s.images = apple.StartImages(s.images, float64(s.env.PixelRatio), func(v *view) bool {
+		return s.views[v.id] == v
+	}, func(v *view, scale float64) { v.image.Start(scale) })
 }
 
 func (s *surface) create(kind driver.ViewKind, id driver.NodeID) *view {
@@ -1672,7 +1802,6 @@ func (s *surface) create(kind driver.ViewKind, id driver.NodeID) *view {
 		v.native = objc.ID(classView).Send(selNew)
 	}
 	v.native.Send(selSetOpaque, false)
-	s.direct(v.native)
 	switch kind {
 	case driver.KindText, driver.KindCanvas:
 		v.newContent()
@@ -1688,9 +1817,11 @@ func (s *surface) create(kind driver.ViewKind, id driver.NodeID) *view {
 		v.video.Dispatch = v.report
 		v.video.Parent = s.viewController()
 		v.native.Send(sel("setClipsToBounds:"), true)
+		s.videos = append(s.videos, v)
 	case driver.KindShader:
 		v.newShader()
 	}
+	s.directTree(v.native)
 	if kind == driver.KindText {
 		v.updateAccessibility() // a text is an element without props
 	}
@@ -1701,12 +1832,16 @@ func (s *surface) create(kind driver.ViewKind, id driver.NodeID) *view {
 // delete releases v; kept leaves its native where it is, going away.
 func (s *surface) delete(v *view, kept bool) {
 	v.releaseCanvasNodes()
+	if v.input != nil {
+		v.input.closeEditMenu()
+	}
 	if v.tsel != nil {
 		v.resignText()
 		v.tsel = nil
 	}
 	delete(s.ownTexts, v.id)
 	if v.sc != nil {
+		v.releaseHandle()
 		for i := range v.sc.edges {
 			if ev := &v.sc.edges[i]; ev.holder != 0 {
 				ev.paint.Release()
@@ -1716,12 +1851,18 @@ func (s *surface) delete(v *view, kept bool) {
 	if v.sheet != nil {
 		s.dismissSheet(v)
 		defer s.updateOrientations()
+	} else if v.kind == driver.KindModal && !v.modalDismissed {
+		v.modalDismissed = true
+		s.engine.Dispatch(driver.Event{Kind: driver.EventModalDismissed, ID: v.id})
 	}
 	if sl := s.slides[v]; sl != nil {
 		s.endSlide(sl)
 	}
 	delete(s.tops, v)
 	if b := v.bar; b != nil {
+		if tw := titleWraps[b.titleWrap]; tw != nil && tw.screen == v {
+			tw.screen = nil
+		}
 		delete(bars, b.bar)
 		b.bar.Send(selRelease)
 		b.item.Send(selRelease)
@@ -1731,6 +1872,7 @@ func (s *surface) delete(v *view, kept bool) {
 		}
 	}
 	if v.headerWrap != 0 {
+		delete(titleWraps, v.headerWrap)
 		v.headerWrap.Send(selRemoveFromSuperview)
 		v.headerWrap.Send(selRelease)
 	}
@@ -1739,6 +1881,7 @@ func (s *surface) delete(v *view, kept bool) {
 	}
 	s.animator.Forget(v.id)
 	delete(s.motions, v)
+	delete(s.transitions, v)
 	if v.component != nil {
 		v.component.Close()
 		v.component = nil
@@ -1767,6 +1910,7 @@ func (s *surface) delete(v *view, kept bool) {
 	}
 	if v.video != nil {
 		v.video.Close()
+		s.videos = slices.DeleteFunc(s.videos, func(video *view) bool { return video == v })
 	}
 	s.endEffect(v)
 	if v.container != 0 {
@@ -1775,6 +1919,9 @@ func (s *surface) delete(v *view, kept bool) {
 	}
 	if v.shader != nil {
 		v.shader.Release()
+	}
+	if v.gpu != nil {
+		s.releaseGPU(v)
 	}
 	delete(views, v.native)
 	if v.input != nil {
@@ -1867,6 +2014,9 @@ func hitTest(self objc.ID, cmd objc.SEL, p apple.CGPoint, event objc.ID) objc.ID
 			}
 		}
 		if own {
+			if v.glassInteractive && v.backdrop != 0 {
+				return v.glassHit(cmd, p, event)
+			}
 			return self
 		}
 		return 0
@@ -1876,15 +2026,74 @@ func hitTest(self objc.ID, cmd objc.SEL, p apple.CGPoint, event objc.ID) objc.ID
 		// The holder of v's children, hit where no child is, is v itself; an input's editor, also v's, takes its own clicks.
 		hit = self
 	}
+	backdropHit := v.isBackdropHit(hit)
 	switch {
 	case !own && !children:
 		return 0
 	case !children && hit != 0: // box-only
+		if v.glassInteractive && v.backdrop != 0 {
+			return v.glassHit(cmd, p, event)
+		}
 		return self
-	case !own && hit == self: // box-none
+	case !own && (hit == self || backdropHit): // box-none
 		return 0
 	}
+	if v.glassInteractive && v.backdrop != 0 && hit != 0 && !backdropHit {
+		if hit == self || ((v.pressable() || v.events.Has(driver.EventPan)) && !childTakesTouch(hit, self)) {
+			return v.glassHit(cmd, p, event)
+		}
+	}
 	return hit
+}
+
+// isBackdropHit reports whether hit is v's backdrop view or a subview inside it.
+func (v *view) isBackdropHit(hit objc.ID) bool {
+	return hit != 0 && v.backdrop != 0 && (hit == v.backdrop || objc.Send[bool](hit, selIsDescendant, v.backdrop))
+}
+
+// glassHit returns the view inside v's interactive glass backdrop that should
+// receive touches at p, falling back to its content view when p is in hitSlop
+// outside the backdrop's bounds.
+func (v *view) glassHit(cmd objc.SEL, p apple.CGPoint, event objc.ID) objc.ID {
+	if v.backdrop == 0 {
+		return v.native
+	}
+	local := objc.Send[apple.CGPoint](v.native, sel("convertPoint:toView:"), p, v.backdrop)
+	if hit := v.backdrop.Send(cmd, local, event); hit != 0 {
+		return hit
+	}
+	if content := v.backdrop.Send(sel("contentView")); content != 0 {
+		return content
+	}
+	return v.backdrop
+}
+
+// childTakesTouch reports whether hit, or any ancestor below stop, handles its
+// own touches (an interactive child, editor, scroll/web/video/native view,
+// selectable text, or nested interactive glass) and should keep the touch rather
+// than routing it to stop's interactive glass backdrop.
+func childTakesTouch(hit, stop objc.ID) bool {
+	owner := views[stop]
+	for n := hit; n != 0 && n != stop; n = n.Send(selSuperview) {
+		if owner != nil && (n == owner.container || owner.isBackdropHit(n)) {
+			continue
+		}
+		c := views[n]
+		if c == nil {
+			return true
+		}
+		if c.native != n && n != c.container {
+			return true
+		}
+		if c.kind == driver.KindInput || c.kind == driver.KindScroll || c.kind == driver.KindWeb ||
+			c.kind == driver.KindVideo || c.kind == driver.KindNative {
+			return true
+		}
+		if c.pressable() || c.events != 0 || c.area || c.selectable == driver.SelectableOn || c.glassInteractive {
+			return true
+		}
+	}
+	return false
 }
 
 // within reports whether p, in v's coordinates, is on v of bounds b or
@@ -1912,6 +2121,9 @@ func (v *view) pressable() bool {
 // ancestor.
 func touchesBegan(self objc.ID, cmd objc.SEL, touches, event objc.ID) {
 	v := views[self]
+	if v != nil && !iosInputAllowed(v.surface.window, event) {
+		return
+	}
 	// A secondary click of a pointer opens a context menu.
 	const secondary = 1 << 1
 	if v != nil && v.events.Has(driver.EventContextMenu) && objc.Send[uint](event, sel("buttonMask"))&secondary != 0 {
@@ -1934,6 +2146,9 @@ func touchesBegan(self objc.ID, cmd objc.SEL, touches, event objc.ID) {
 
 func touchesCancelled(self objc.ID, cmd objc.SEL, touches, event objc.ID) {
 	v := views[self]
+	if v != nil && !iosInputAllowed(v.surface.window, event) {
+		return
+	}
 	if v == nil || !v.pressable() {
 		apple.Super(self, cmd, touches, event)
 		return
@@ -1945,6 +2160,9 @@ func touchesCancelled(self objc.ID, cmd objc.SEL, touches, event objc.ID) {
 
 func touchesEnded(self objc.ID, cmd objc.SEL, touches, event objc.ID) {
 	v := views[self]
+	if v != nil && !iosInputAllowed(v.surface.window, event) {
+		return
+	}
 	if v == nil || !v.pressable() {
 		apple.Super(self, cmd, touches, event)
 		return
@@ -1983,6 +2201,9 @@ var keyNames = map[int]string{
 // and passes the rest on.
 func pressesBegan(self objc.ID, cmd objc.SEL, presses, event objc.ID) {
 	app := pressSurface(self)
+	if app != nil && !iosInputAllowed(app.window, event) {
+		return
+	}
 	if app != nil && typesKey(presses) {
 		app.engine.InputModality(driver.ModalityKeyboard)
 	}
@@ -2002,22 +2223,40 @@ func pressesBegan(self objc.ID, cmd objc.SEL, presses, event objc.ID) {
 	if app != nil && app.engine != nil && len(app.keys) > 0 {
 		focus := app.focusKeyUse()
 		apple.ForEach(presses, func(press objc.ID) {
-			key := press.Send(sel("key"))
-			if key == 0 || consumed {
+			if consumed {
 				return
 			}
-			name, ok := keyNames[objc.Send[int](key, sel("keyCode"))]
-			if !ok {
-				name = strings.ToLower(apple.GoString(key.Send(sel("charactersIgnoringModifiers"))))
+			var name string
+			var flags uint
+			if key := press.Send(sel("key")); key != 0 {
+				var ok bool
+				name, ok = keyNames[objc.Send[int](key, sel("keyCode"))]
+				if !ok {
+					name = strings.ToLower(apple.GoString(key.Send(sel("charactersIgnoringModifiers"))))
+				}
+				flags = objc.Send[uint](key, sel("modifierFlags"))
+			} else if onTV() {
+				name = remoteArrowName(objc.Send[int](press, sel("type")))
 			}
 			if name != "" {
-				id, consumed = driver.FindKey(app.keys, apple.KeyNames(name, objc.Send[uint](key, sel("modifierFlags"))),
+				id, consumed = driver.FindKey(app.keys, apple.KeyNames(name, flags),
 					focus, false)
 			}
 		})
 	}
 	if !consumed {
-		apple.Super(self, cmd, presses, event)
+		activated := false
+		if app != nil && app.engine != nil {
+			apple.ForEach(presses, func(press objc.ID) {
+				if key := press.Send(sel("key")); key != 0 {
+					mods := app.heldModifiers(apple.Modifiers(objc.Send[uint](key, sel("modifierFlags"))))
+					activated = app.activateKey(pressesKey(key), mods) || activated
+				}
+			})
+		}
+		if !activated {
+			apple.Super(self, cmd, presses, event)
+		}
 		return
 	}
 	app.engine.Dispatch(driver.Event{Kind: driver.EventKey, Count: id})
@@ -2090,7 +2329,7 @@ func (s *surface) pressKeys(presses objc.ID) bool {
 		mods := s.heldModifiers(apple.Modifiers(objc.Send[uint](key, sel("modifierFlags"))))
 		if held, ok := s.keysHeld[code]; ok {
 			// Its up never came: report it before the key goes down again.
-			s.engine.Dispatch(driver.Event{Kind: driver.EventKeyUp, ID: held.id, Text: held.name, Modifiers: withModifier(mods, held.name, false)})
+			s.engine.Dispatch(driver.Event{Kind: driver.EventKeyUp, ID: held.id, Text: held.name, KeyCode: driver.USBKeyCode(uint16(code)), Modifiers: withModifier(mods, held.name, false)})
 		}
 		mods = withModifier(mods, name, true)
 		if s.keysHeld == nil {
@@ -2098,11 +2337,11 @@ func (s *surface) pressKeys(presses objc.ID) bool {
 		}
 		if v == nil {
 			s.keysHeld[code] = heldKey{0, name}
-			s.engine.Dispatch(driver.Event{Kind: driver.EventKeyDown, Text: name, Modifiers: mods})
+			s.engine.Dispatch(driver.Event{Kind: driver.EventKeyDown, Text: name, KeyCode: driver.USBKeyCode(uint16(code)), Modifiers: mods})
 			return
 		}
 		s.keysHeld[code] = heldKey{v.id, name}
-		if s.engine.DispatchKeyDown(driver.Event{Kind: driver.EventKeyDown, ID: v.id, Text: name, Modifiers: mods}) {
+		if s.engine.DispatchKeyDown(driver.Event{Kind: driver.EventKeyDown, ID: v.id, Text: name, KeyCode: driver.USBKeyCode(uint16(code)), Modifiers: mods}) {
 			consumed = true
 		}
 	})
@@ -2131,7 +2370,7 @@ func (s *surface) releasePresses(presses, event objc.ID) {
 			flags = objc.Send[uint](event, sel("modifierFlags"))
 		}
 		mods := withModifier(s.heldModifiers(apple.Modifiers(flags)), held.name, s.holds(held.name))
-		s.engine.Dispatch(driver.Event{Kind: driver.EventKeyUp, ID: held.id, Text: held.name, Modifiers: mods})
+		s.engine.Dispatch(driver.Event{Kind: driver.EventKeyUp, ID: held.id, Text: held.name, KeyCode: driver.USBKeyCode(uint16(code)), Modifiers: mods})
 	})
 }
 
@@ -2161,7 +2400,7 @@ func (s *surface) releaseKeys() {
 	}
 	for code, held := range s.keysHeld {
 		delete(s.keysHeld, code)
-		s.engine.Dispatch(driver.Event{Kind: driver.EventKeyUp, ID: held.id, Text: held.name})
+		s.engine.Dispatch(driver.Event{Kind: driver.EventKeyUp, ID: held.id, Text: held.name, KeyCode: driver.USBKeyCode(uint16(code))})
 	}
 }
 
@@ -2195,6 +2434,9 @@ func pressSurface(self objc.ID) *surface {
 // pressesEnded reports the held keys' ups and stops repeating a held key's binding.
 func pressesEnded(self objc.ID, cmd objc.SEL, presses, event objc.ID) {
 	app := pressSurface(self)
+	if app != nil && !iosInputAllowed(app.window, event) {
+		return
+	}
 	if app != nil && app.engine != nil {
 		app.releasePresses(presses, event)
 	}
@@ -2252,11 +2494,19 @@ func surfaceLayout(self objc.ID, cmd objc.SEL) {
 		s := v.surface
 		size := driver.Size{Width: driver.Points(b.Size.Width), Height: driver.Points(b.Size.Height)}
 		g := s.geometry(size)
+		height := s.keyboardOverlap()
+		keyboardChanged := s.keyboard != height
+		if keyboardChanged {
+			s.keyboard = height
+		}
 		if env := s.environment(); !env.Equal(s.env) {
 			s.env = env
 			s.engine.ResizeWithEnvironment(size, g, env)
 		} else {
 			s.engine.Resize(size, g)
+		}
+		if keyboardChanged {
+			s.keepFocusedClear()
 		}
 		if h := v.surface.hud; h != nil {
 			h.layout()
@@ -2299,6 +2549,11 @@ func scrolled(self objc.ID, _ objc.SEL, _ objc.ID) {
 		return
 	}
 	apple.FollowBounds(self.Send(selLayer))
+	if v.container != 0 {
+		clip := v.drawn
+		clip.Clip = v.clipHeld
+		v.fitHolder(&clip)
+	}
 	// Pinning it scrolls it again, which reports the pinned offset.
 	if at := objc.Send[apple.CGPoint](self, selContentOffset); pinTop(self) && objc.Send[apple.CGPoint](self, selContentOffset) != at {
 		return
@@ -2318,27 +2573,12 @@ func scrolled(self objc.ID, _ objc.SEL, _ objc.ID) {
 	if v.sc != nil && v.hasEdges() {
 		v.followEdges()
 	}
+	if v.sc != nil {
+		v.updateHandle()
+	}
 	v.surface.followLargeTitle(v, offset.Y)
 	v.scrollEvent(driver.EventScroll)
 }
 
-// dirtyPictureInPictures schedules snapshots after tree changes, animation steps and image loads, including ones that need no engine commit.
-func (s *surface) dirtyPictureInPictures() {
-	for _, v := range s.pips {
-		v.pip.Dirty()
-		if v.pip.Layer() != 0 {
-			s.startTicking()
-		}
-	}
-}
-
-// drawPictureInPictures retains one pending frame under back-pressure.
-func (s *surface) drawPictureInPictures() bool {
-	pending := false
-	for _, v := range s.pips {
-		if v.pip.DrawFrame(v.native.Send(selLayer), float64(s.env.PixelRatio)) {
-			pending = true
-		}
-	}
-	return pending
-}
+// motionReduced uses a test's pinned preference for the renderer too; the system's environment is kept intact for future preference changes.
+func (s *surface) motionReduced() bool { return driver.Pinned(s.env, s.envPin).ReduceMotion }
