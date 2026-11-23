@@ -235,6 +235,12 @@ func touch(w objc.ID, p driver.Point, ph phase) {
 }
 
 func enqueueTouch(w objc.ID, p driver.Point, ph phase) {
+	enqueueDigitizerTouch(w, p, ph, false)
+}
+
+// enqueueDigitizerTouch distinguishes touchscreen input from the Apple TV
+// remote's non-display-integrated touch surface.
+func enqueueDigitizerTouch(w objc.ID, p driver.Point, ph phase, indirect bool) {
 	if w == 0 {
 		return
 	}
@@ -251,12 +257,16 @@ func enqueueTouch(w objc.ID, p driver.Point, ph phase) {
 	if hand == 0 {
 		return
 	}
-	hidSetInteger(hand, fieldIntegrated, 1)
+	integrated := int64(1)
+	if indirect {
+		integrated = 0
+	}
+	hidSetInteger(hand, fieldIntegrated, integrated)
 	finger := hidFinger(0, now, 1, 2, mask, float64(p.X), float64(p.Y), 0, float64(touching), 0, touching, touching, 0)
 	if finger != 0 {
 		hidSetFloat(finger, fieldMajorRadius, 5)
 		hidSetFloat(finger, fieldMinorRadius, 5)
-		hidSetInteger(finger, fieldIntegrated, 1)
+		hidSetInteger(finger, fieldIntegrated, integrated)
 		hidAppend(hand, finger, 0)
 		apple.Release(finger)
 	}
@@ -570,23 +580,33 @@ func (t *testSurface) RightClick(driver.Point) error {
 // still reporting where it is before it lifts, so it ends without a
 // fling.
 func fingerAlong(w objc.ID, path []driver.Point) {
-	touch(w, path[0], down)
+	fingerAlongInput(w, path, false)
+}
+
+func fingerAlongInput(w objc.ID, path []driver.Point, indirect bool) {
+	send := touch
+	if indirect {
+		send = func(w objc.ID, p driver.Point, ph phase) {
+			onMainSync(func() { enqueueDigitizerTouch(w, p, ph, true) })
+		}
+	}
+	send(w, path[0], down)
 	time.Sleep(100 * time.Millisecond)
 	at := path[0]
 	for _, to := range path[1:] {
 		n := int(math.Max(math.Abs(float64(to.X-at.X)), math.Abs(float64(to.Y-at.Y)))/10) + 1
 		for i := 1; i <= n; i++ {
 			f := driver.Points(i) / driver.Points(n)
-			touch(w, driver.Point{X: at.X + (to.X-at.X)*f, Y: at.Y + (to.Y-at.Y)*f}, move)
+			send(w, driver.Point{X: at.X + (to.X-at.X)*f, Y: at.Y + (to.Y-at.Y)*f}, move)
 			time.Sleep(16 * time.Millisecond)
 		}
 		at = to
 	}
 	for range 6 {
-		touch(w, at, move)
+		send(w, at, move)
 		time.Sleep(16 * time.Millisecond)
 	}
-	touch(w, at, up)
+	send(w, at, up)
 }
 
 func (t *testSurface) Drag(path []driver.Point) error {
@@ -725,7 +745,7 @@ func (t *testSurface) Scroll(at driver.Point, delta driver.Point) error {
 		return err
 	}
 	if t.useSimulatorHID() {
-		fingerAlong(w, []driver.Point{at, {X: at.X - delta.X, Y: at.Y - delta.Y}})
+		fingerAlongInput(w, []driver.Point{at, {X: at.X - delta.X, Y: at.Y - delta.Y}}, onTV())
 		return nil
 	}
 	return t.scrollDevice(w, at, delta)

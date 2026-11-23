@@ -23,6 +23,8 @@ Use `ui`'s component whenever one exists: it is `base`'s control with NSGo's loo
 
 ## Using them well
 
+- `core.Scroll` on Apple TV accepts remote-surface swipes for nonfocusable content such as long text. Use `nsgotest.App.Scroll` for native indirect-input coverage in the tvOS simulator; physical remote acceptance is separate. [Scroll](https://nsgo.dev/docs/ui/scroll.md)
+
 - Give a text attachment's span `Content` for selections to copy in its place; empty content omits it ([text](https://nsgo.dev/docs/text.md#runs-and-links)).
 - For diagrams in an app's palette, return `base/diagram.View` with `ThemeFunc` from the text view's `RenderDiagram` callback and build its `diagram.Theme` from `ui.ColorsOf(cx)` inside that function ([text](https://nsgo.dev/docs/text.md#documents)).
 - For formulas receiving source in chunks, use `formula.View.SourceFunc` with `Streaming` or `StreamingFunc` to hide unfinished recovery ink, and clear the flag at completion so remaining errors show; a TextView `RenderMath` callback can return that view ([text](https://nsgo.dev/docs/text.md)).

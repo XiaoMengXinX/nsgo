@@ -118,6 +118,13 @@ func behaviorMethods() []objc.MethodDef {
 func newScroll(v *view) {
 	v.native.Send(selSetDeleg, v.native)
 	v.native.Send(sel("setContentInsetAdjustmentBehavior:"), 2) // never
+	if onTV() {
+		// UITouchTypeIndirect is the Siri Remote's surface. UIKit also enables
+		// directional-press scrolling when its pan accepts indirect touches.
+		indirect := objc.ID(apple.Class("NSNumber")).Send(sel("numberWithInt:"), 1)
+		types := objc.ID(apple.Class("NSArray")).Send(sel("arrayWithObject:"), indirect)
+		v.native.Send(selPanRecognizer).Send(sel("setAllowedTouchTypes:"), types)
+	}
 	v.sc = &scrollState{}
 	tap := objc.ID(apple.Class("UITapGestureRecognizer")).Send(selAlloc).
 		Send(sel("initWithTarget:action:"), v.native, selDismissKeyboard)
