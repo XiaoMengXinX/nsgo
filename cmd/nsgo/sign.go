@@ -79,9 +79,9 @@ type signing struct {
 // signFlags are nsgo build's flags that replace nsgo.yaml's sign values.
 type signFlags struct {
 	identity, profile, widgetsProfile, shareProfile, clipProfile, macOSProfile *override[string]
-	installer                                                    *override[string]
-	keystore, alias, notarize                                    *override[string]
-	certificate, signCommand, timestamp                          *override[string]
+	installer                                                                  *override[string]
+	keystore, alias, notarize                                                  *override[string]
+	certificate, signCommand, timestamp                                        *override[string]
 }
 
 func (f *signFlags) bind(fs *flag.FlagSet) {
@@ -348,6 +348,9 @@ func signForStore(ctx context.Context, p *project, sys *appleOS, app string) err
 	}
 	if sys == iOS {
 		if err := signIOSWidgets(ctx, p, app, identity); err != nil {
+			return err
+		}
+		if err := signIOSShare(ctx, p, app, identity); err != nil {
 			return err
 		}
 		if err := signIOSClip(ctx, p, app, identity); err != nil {

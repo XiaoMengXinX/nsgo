@@ -221,6 +221,9 @@ func buildIOSApp(ctx context.Context, p *project, sys *appleOS, dir string, simu
 	if widgets {
 		extra += "\n" + p.widgetPlist(true)
 	}
+	if sys == iOS && p.iosShares() {
+		extra += "\n" + p.sharePlist()
+	}
 	if sys == iOS {
 		extra += "\n" + p.clipStoragePlist()
 	}
@@ -250,6 +253,11 @@ func buildIOSApp(ctx context.Context, p *project, sys *appleOS, dir string, simu
 	}
 	if widgets {
 		if err := addIOSWidgets(ctx, p, app, simulator); err != nil {
+			return "", err
+		}
+	}
+	if sys == iOS {
+		if err := addIOSShare(ctx, p, app, env, simulator); err != nil {
 			return "", err
 		}
 	}
@@ -551,6 +559,7 @@ func writeIOSSigningProject(p *project, sys *appleOS, app, work, team string) (s
 		return "", err
 	}
 	data := iosProjectData(p, sys, team)
+	extensions := iosSigningExtensions(p, sys)
 	if p.clipParent != "" {
 		// Xcode registers an App Clip's App ID under its parent's from
 		// these entitlements, and fills in the team's prefix.
@@ -560,7 +569,7 @@ func writeIOSSigningProject(p *project, sys *appleOS, app, work, team string) (s
 		data["Entitlements"] = "Clip.entitlements"
 	}
 	if p.clipParent == "" {
-		if ents := p.xcodeEntitlements(data["Widgets"] != "", data["Clip"] != ""); len(ents) > 0 {
+		if ents := p.xcodeEntitlements(len(extensions) > 0, data["Clip"] != ""); len(ents) > 0 {
 			if err := os.WriteFile(filepath.Join(work, "App.entitlements"), encodePlist(ents), 0o644); err != nil {
 				return "", err
 			}
@@ -578,13 +587,12 @@ func writeIOSSigningProject(p *project, sys *appleOS, app, work, team string) (s
 			}
 		}
 	}
-	if data["Widgets"] != "" {
-		// The extension signs as a target of its own, and shares the app group with the app.
-		info, err := os.ReadFile(filepath.Join(iosWidgetsAppex(app), "Info.plist"))
+	for _, extension := range extensions {
+		info, err := os.ReadFile(filepath.Join(app, "PlugIns", extension.Name+".appex", "Info.plist"))
 		if err != nil {
 			return "", err
 		}
-		for name, content := range map[string][]byte{"Widgets-Info.plist": info, "Widgets.entitlements": encodePlist(p.groupEntitlements())} {
+		for name, content := range map[string][]byte{extension.Name + "-Info.plist": info, extension.Name + ".entitlements": encodePlist(p.groupEntitlements())} {
 			if err := os.WriteFile(filepath.Join(work, name), content, 0o644); err != nil {
 				return "", err
 			}
@@ -606,8 +614,9 @@ func writeIOSSigningProject(p *project, sys *appleOS, app, work, team string) (s
 
 // iosProjectData fills iosProject in for p on sys, signed by team: an
 // app's, or an App Clip's, whose product type Xcode signs as one.
-func iosProjectData(p *project, sys *appleOS, team string) map[string]string {
-	data := map[string]string{
+func iosProjectData(p *project, sys *appleOS, team string) map[string]any {
+	data := map[string]any{
+		"Extensions":  iosSigningExtensions(p, sys),
 		"Name":        p.Name,
 		"App":         p.Name + ".app",
 		"ID":          p.ID,
@@ -618,6 +627,7 @@ func iosProjectData(p *project, sys *appleOS, team string) map[string]string {
 		"Minimum":     sys.minimum,
 		"Families":    sys.familyList(),
 		"ProductType": "com.apple.product-type.application",
+		"Clip":        "",
 	}
 	if minimum, err := p.appleMinimum(sys); err == nil {
 		data["Minimum"] = minimum
@@ -1089,35 +1099,70 @@ var iosProject = template.Must(template.New("ios").Funcs(template.FuncMap{"pbx":
 
 /* Begin PBXFileReference section */
 		AA0000000000000000000001 /* Nsgo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = {{pbx .App}}; sourceTree = BUILT_PRODUCTS_DIR; };
-{{- if .Widgets}}
-		AA0000000000000000000010 /* Widgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = Widgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+{{- range .Extensions}}
+		{{.Prefix}}0000000000000000000010 /* {{.Name}}.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = {{.Name}}.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 {{- end}}
 {{- if .Clip}}
 		AA0000000000000000000020 /* App Clip */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = {{pbx .ClipApp}}; sourceTree = BUILT_PRODUCTS_DIR; };
 {{- end}}
 /* End PBXFileReference section */
-{{- if or .Widgets .Clip}}
+{{- range .Extensions}}
 
 /* Begin PBXBuildFile section */
-{{- if .Widgets}}
-		AA0000000000000000000011 /* Widgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000010 /* Widgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
-{{- end}}
-{{- if .Clip}}
-		AA0000000000000000000021 /* App Clip in Embed App Clips */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000020 /* App Clip */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
-{{- end}}
+		{{.Prefix}}0000000000000000000011 /* {{.Name}}.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = {{.Prefix}}0000000000000000000010 /* {{.Name}}.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
-{{- if .Widgets}}
-		AA000000000000000000001A /* PBXContainerItemProxy */ = {
+		{{.Prefix}}000000000000000000001A /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = AA0000000000000000000007 /* Project object */;
 			proxyType = 1;
-			remoteGlobalIDString = AA0000000000000000000013;
-			remoteInfo = Widgets;
+			remoteGlobalIDString = {{.Prefix}}0000000000000000000013;
+			remoteInfo = {{.Name}};
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		{{.Prefix}}0000000000000000000012 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				{{.Prefix}}0000000000000000000011 /* {{.Name}}.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+{{- end}}
+{{- if .Clip}}
+
+/* Begin PBXBuildFile section */
+		AA0000000000000000000021 /* App Clip in Embed App Clips */ = {isa = PBXBuildFile; fileRef = AA0000000000000000000020 /* App Clip */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+{{- end}}
+
+/* Begin PBXFrameworksBuildPhase section */
+		AA0000000000000000000002 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+{{- range .Extensions}}
+		{{.Prefix}}0000000000000000000015 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
 		};
 {{- end}}
 {{- if .Clip}}
+
+/* Begin PBXContainerItemProxy section */
 		AA000000000000000000002A /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = AA0000000000000000000007 /* Project object */;
@@ -1125,24 +1170,9 @@ var iosProject = template.Must(template.New("ios").Funcs(template.FuncMap{"pbx":
 			remoteGlobalIDString = AA0000000000000000000023;
 			remoteInfo = Clip;
 		};
-{{- end}}
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
-{{- if .Widgets}}
-		AA0000000000000000000012 /* Embed Foundation Extensions */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = "";
-			dstSubfolderSpec = 13;
-			files = (
-				AA0000000000000000000011 /* Widgets.appex in Embed Foundation Extensions */,
-			);
-			name = "Embed Foundation Extensions";
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-{{- end}}
-{{- if .Clip}}
 		AA0000000000000000000022 /* Embed App Clips */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
@@ -1154,34 +1184,7 @@ var iosProject = template.Must(template.New("ios").Funcs(template.FuncMap{"pbx":
 			name = "Embed App Clips";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-{{- end}}
 /* End PBXCopyFilesBuildPhase section */
-{{- end}}
-
-/* Begin PBXFrameworksBuildPhase section */
-		AA0000000000000000000002 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-{{- if .Widgets}}
-		AA0000000000000000000015 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-{{- end}}
-{{- if .Clip}}
-		AA0000000000000000000025 /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = ();
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 {{- end}}
 /* End PBXFrameworksBuildPhase section */
 
@@ -1190,8 +1193,8 @@ var iosProject = template.Must(template.New("ios").Funcs(template.FuncMap{"pbx":
 			isa = PBXGroup;
 			children = (
 				AA0000000000000000000001 /* Nsgo.app */,
-{{- if .Widgets}}
-				AA0000000000000000000010 /* Widgets.appex */,
+{{- range .Extensions}}
+				{{.Prefix}}0000000000000000000010 /* {{.Name}}.appex */,
 {{- end}}
 {{- if .Clip}}
 				AA0000000000000000000020 /* App Clip */,
@@ -1208,8 +1211,8 @@ var iosProject = template.Must(template.New("ios").Funcs(template.FuncMap{"pbx":
 			buildPhases = (
 				AA0000000000000000000006 /* Copy the app */,
 				AA0000000000000000000002 /* Frameworks */,
-{{- if .Widgets}}
-				AA0000000000000000000012 /* Embed Foundation Extensions */,
+{{- range .Extensions}}
+				{{.Prefix}}0000000000000000000012 /* Embed Foundation Extensions */,
 {{- end}}
 {{- if .Clip}}
 				AA0000000000000000000022 /* Embed App Clips */,
@@ -1218,8 +1221,8 @@ var iosProject = template.Must(template.New("ios").Funcs(template.FuncMap{"pbx":
 			buildRules = (
 			);
 			dependencies = (
-{{- if .Widgets}}
-				AA0000000000000000000019 /* PBXTargetDependency */,
+{{- range .Extensions}}
+				{{.Prefix}}0000000000000000000019 /* PBXTargetDependency */,
 {{- end}}
 {{- if .Clip}}
 				AA0000000000000000000029 /* PBXTargetDependency */,
@@ -1230,25 +1233,25 @@ var iosProject = template.Must(template.New("ios").Funcs(template.FuncMap{"pbx":
 			productReference = AA0000000000000000000001 /* Nsgo.app */;
 			productType = {{pbx .ProductType}};
 		};
-{{- if .Widgets}}
-		AA0000000000000000000013 /* Widgets */ = {
+{{- range .Extensions}}
+		{{.Prefix}}0000000000000000000013 /* {{.Name}} */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = AA0000000000000000000016 /* Build configuration list for PBXNativeTarget "Widgets" */;
+			buildConfigurationList = {{.Prefix}}0000000000000000000016 /* Build configuration list for PBXNativeTarget "{{.Name}}" */;
 			buildPhases = (
-				AA0000000000000000000014 /* Copy the extension */,
-				AA0000000000000000000015 /* Frameworks */,
+				{{.Prefix}}0000000000000000000014 /* Copy the extension */,
+				{{.Prefix}}0000000000000000000015 /* Frameworks */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 			);
-			name = Widgets;
-			productName = Widgets;
-			productReference = AA0000000000000000000010 /* Widgets.appex */;
+			name = {{.Name}};
+			productName = {{.Name}};
+			productReference = {{.Prefix}}0000000000000000000010 /* {{.Name}}.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
 {{- end}}
-{{- if .Clip}}
+		{{- if .Clip}}
 		AA0000000000000000000023 /* Clip */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = AA0000000000000000000026 /* Build configuration list for Clip */;
@@ -1263,7 +1266,7 @@ var iosProject = template.Must(template.New("ios").Funcs(template.FuncMap{"pbx":
 			productReference = AA0000000000000000000020 /* App Clip */;
 			productType = "com.apple.product-type.application.on-demand-install-capable";
 		};
-{{- end}}
+		{{- end}}
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -1292,8 +1295,8 @@ var iosProject = template.Must(template.New("ios").Funcs(template.FuncMap{"pbx":
 			projectRoot = "";
 			targets = (
 				AA0000000000000000000004 /* Nsgo */,
-{{- if .Widgets}}
-				AA0000000000000000000013 /* Widgets */,
+{{- range .Extensions}}
+				{{.Prefix}}0000000000000000000013 /* {{.Name}} */,
 {{- end}}
 {{- if .Clip}}
 				AA0000000000000000000023 /* Clip */,
@@ -1318,8 +1321,8 @@ var iosProject = template.Must(template.New("ios").Funcs(template.FuncMap{"pbx":
 			shellPath = /bin/sh;
 			shellScript = {{pbx .Script}};
 		};
-{{- if .Widgets}}
-		AA0000000000000000000014 /* Copy the extension */ = {
+{{- range .Extensions}}
+		{{.Prefix}}0000000000000000000014 /* Copy the extension */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
 			buildActionMask = 2147483647;
@@ -1332,7 +1335,7 @@ var iosProject = template.Must(template.New("ios").Funcs(template.FuncMap{"pbx":
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = {{pbx .WidgetsScript}};
+			shellScript = {{pbx .Script}};
 		};
 {{- end}}
 {{- if .Clip}}
@@ -1350,23 +1353,24 @@ var iosProject = template.Must(template.New("ios").Funcs(template.FuncMap{"pbx":
 		};
 {{- end}}
 /* End PBXShellScriptBuildPhase section */
-{{- if or .Widgets .Clip}}
+{{- range .Extensions}}
 
 /* Begin PBXTargetDependency section */
-{{- if .Widgets}}
-		AA0000000000000000000019 /* PBXTargetDependency */ = {
+		{{.Prefix}}0000000000000000000019 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = AA0000000000000000000013 /* Widgets */;
-			targetProxy = AA000000000000000000001A /* PBXContainerItemProxy */;
+			target = {{.Prefix}}0000000000000000000013 /* {{.Name}} */;
+			targetProxy = {{.Prefix}}000000000000000000001A /* PBXContainerItemProxy */;
 		};
+/* End PBXTargetDependency section */
 {{- end}}
 {{- if .Clip}}
+
+/* Begin PBXTargetDependency section */
 		AA0000000000000000000029 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = AA0000000000000000000023 /* Clip */;
 			targetProxy = AA000000000000000000002A /* PBXContainerItemProxy */;
 		};
-{{- end}}
 /* End PBXTargetDependency section */
 {{- end}}
 
@@ -1376,8 +1380,6 @@ var iosProject = template.Must(template.New("ios").Funcs(template.FuncMap{"pbx":
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ENABLE_MODULES = YES;
-				NSGO_SIGNED_PRODUCTS_DIR = "$(SYMROOT)/products";
-				CONFIGURATION_BUILD_DIR = "$(NSGO_SIGNED_PRODUCTS_DIR)";
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				{{.Deployment}} = {{.Minimum}};
 				SDKROOT = {{.SDK}};
@@ -1389,8 +1391,6 @@ var iosProject = template.Must(template.New("ios").Funcs(template.FuncMap{"pbx":
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				CLANG_ENABLE_MODULES = YES;
-				NSGO_SIGNED_PRODUCTS_DIR = "$(SYMROOT)/products";
-				CONFIGURATION_BUILD_DIR = "$(NSGO_SIGNED_PRODUCTS_DIR)";
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				{{.Deployment}} = {{.Minimum}};
 				SDKROOT = {{.SDK}};
@@ -1400,6 +1400,8 @@ var iosProject = template.Must(template.New("ios").Funcs(template.FuncMap{"pbx":
 		AA000000000000000000000B /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				NSGO_SIGNED_PRODUCTS_DIR = "$(SYMROOT)/products";
+				CONFIGURATION_BUILD_DIR = "$(NSGO_SIGNED_PRODUCTS_DIR)";
 {{- with .Entitlements}}
 				CODE_SIGN_ENTITLEMENTS = {{pbx .}};
 {{- end}}
@@ -1418,6 +1420,8 @@ var iosProject = template.Must(template.New("ios").Funcs(template.FuncMap{"pbx":
 		AA000000000000000000000C /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				NSGO_SIGNED_PRODUCTS_DIR = "$(SYMROOT)/products";
+				CONFIGURATION_BUILD_DIR = "$(NSGO_SIGNED_PRODUCTS_DIR)";
 {{- with .Entitlements}}
 				CODE_SIGN_ENTITLEMENTS = {{pbx .}};
 {{- end}}
@@ -1433,38 +1437,38 @@ var iosProject = template.Must(template.New("ios").Funcs(template.FuncMap{"pbx":
 			};
 			name = Release;
 		};
-{{- if .Widgets}}
-		AA0000000000000000000017 /* Debug */ = {
+{{- range .Extensions}}
+		{{.Prefix}}0000000000000000000017 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CODE_SIGN_ENTITLEMENTS = Widgets.entitlements;
+				CODE_SIGN_ENTITLEMENTS = {{.Name}}.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = {{pbx .Team}};
+				DEVELOPMENT_TEAM = {{pbx $.Team}};
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
-				INFOPLIST_FILE = "Widgets-Info.plist";
-				{{.Deployment}} = 15.0;
-				PRODUCT_BUNDLE_IDENTIFIER = {{pbx .WidgetsID}};
-				PRODUCT_NAME = Widgets;
-				SDKROOT = {{.SDK}};
+				INFOPLIST_FILE = "{{.Name}}-Info.plist";
+				{{$.Deployment}} = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = {{pbx .ID}};
+				PRODUCT_NAME = {{.Name}};
+				SDKROOT = {{$.SDK}};
 				SKIP_INSTALL = YES;
-				TARGETED_DEVICE_FAMILY = {{pbx .Families}};
+				TARGETED_DEVICE_FAMILY = {{pbx $.Families}};
 			};
 			name = Debug;
 		};
-		AA0000000000000000000018 /* Release */ = {
+		{{.Prefix}}0000000000000000000018 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CODE_SIGN_ENTITLEMENTS = Widgets.entitlements;
+				CODE_SIGN_ENTITLEMENTS = {{.Name}}.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = {{pbx .Team}};
+				DEVELOPMENT_TEAM = {{pbx $.Team}};
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
-				INFOPLIST_FILE = "Widgets-Info.plist";
-				{{.Deployment}} = 15.0;
-				PRODUCT_BUNDLE_IDENTIFIER = {{pbx .WidgetsID}};
-				PRODUCT_NAME = Widgets;
-				SDKROOT = {{.SDK}};
+				INFOPLIST_FILE = "{{.Name}}-Info.plist";
+				{{$.Deployment}} = 15.0;
+				PRODUCT_BUNDLE_IDENTIFIER = {{pbx .ID}};
+				PRODUCT_NAME = {{.Name}};
+				SDKROOT = {{$.SDK}};
 				SKIP_INSTALL = YES;
-				TARGETED_DEVICE_FAMILY = {{pbx .Families}};
+				TARGETED_DEVICE_FAMILY = {{pbx $.Families}};
 			};
 			name = Release;
 		};
@@ -1528,12 +1532,12 @@ var iosProject = template.Must(template.New("ios").Funcs(template.FuncMap{"pbx":
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-{{- if .Widgets}}
-		AA0000000000000000000016 /* Build configuration list for PBXNativeTarget "Widgets" */ = {
+{{- range .Extensions}}
+		{{.Prefix}}0000000000000000000016 /* Build configuration list for PBXNativeTarget "{{.Name}}" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
-				AA0000000000000000000017 /* Debug */,
-				AA0000000000000000000018 /* Release */,
+				{{.Prefix}}0000000000000000000017 /* Debug */,
+				{{.Prefix}}0000000000000000000018 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
