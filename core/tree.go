@@ -389,6 +389,7 @@ type node struct {
 	confines                   bool
 	transformed                bool
 	hidden                     bool
+	covered                    bool // a screen DisplayNone hides only as another of its stack covers it: its view hides, its layout stays as it last showed
 	headerView                 bool
 	inputBar                   bool
 	panning                    bool // it follows pans: OnPan or PanValues
@@ -1488,6 +1489,7 @@ func (t *Tree) restyle(n *node) bool {
 		lines, overflow, pointer, visibility, display := was.NumberOfLines, was.TextOverflow, was.PointerEvents, was.Visibility, was.Display
 		n.style = n.base
 		n.flags &^= flagStyleOwned
+		n.covered = false
 		return t.finishRestyle(n, z, sticky, lines, overflow, pointer, visibility, display)
 	}
 	p := n.labelProps()
@@ -1537,11 +1539,13 @@ func (t *Tree) restyle(n *node) bool {
 		t.sscratch.FocusVisible = full.FocusVisible
 	}
 	n.applyEnvStyle(&t.sscratch)
-	if n.screen != nil && n.screen.hidden {
+	n.covered = n.screen != nil && n.screen.hidden && t.sscratch.Display != DisplayNone
+	if n.covered {
 		t.sscratch.Display = DisplayNone
 	}
 	if len(t.suspended) > 0 && t.suspendedIn(n) {
 		t.sscratch.Display = DisplayNone
+		n.covered = false
 	}
 	switch {
 	case n.hasFlag(flagStyleOwned):

@@ -256,7 +256,10 @@ func (n *node) layoutStyle() layout.Style {
 
 	switch s.Display {
 	case DisplayNone:
-		l.Display = layout.DisplayNone
+		// A covered screen keeps its place in the layout: only its view hides.
+		if !n.covered {
+			l.Display = layout.DisplayNone
+		}
 	case DisplayGrid:
 		l.Display = layout.DisplayGrid
 	case DisplayBlock:
@@ -660,7 +663,7 @@ func (t *Tree) syncFrames(n *node) {
 		}
 		// As NSH's frame walk does, a hidden subtree gets empty frames and
 		// content boxes, whatever its layout kept.
-		hidden := n.hidden || c.style.Display == DisplayNone
+		hidden := n.hidden || c.style.Display == DisplayNone && !c.covered
 		shown := hidden != c.hidden
 		if shown {
 			c.hidden = hidden

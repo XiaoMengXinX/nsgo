@@ -374,8 +374,9 @@ func TestBackPreviewNamesTheScreenBackPops(t *testing.T) {
 	}
 	h.tree.Dispatch(driver.Event{Kind: driver.EventBackCancelled})
 	h.commit()
-	if f := h.find("home").frame; f.Size.Width != 0 {
-		t.Errorf("home's frame = %v after the gesture was cancelled", f)
+	// Covered again, home hides and keeps its layout for the next uncover.
+	if n := h.find("home"); n.style.Display != DisplayNone || n.frame.Size.Width == 0 {
+		t.Errorf("home's display = %v, frame = %v after the gesture was cancelled, want hidden as laid out", n.style.Display, n.frame)
 	}
 	open.Set(true)
 	if got := preview(); got != 0 {
@@ -829,5 +830,48 @@ func TestScreenHeaderTitleIntrinsicAndToggle(t *testing.T) {
 	}
 	if got := h2.find("compact").frame.Size.Width; got != 66 {
 		t.Fatalf("compact width after toggle back = %v, want 66", got)
+	}
+}
+
+// A screen another covers hides, and keeps its layout: its text and the
+// rows of its list are as they were when it shows again, with no pass to
+// lay them out first.
+func TestCoveredScreenKeepsItsLayout(t *testing.T) {
+	var top *Signal[bool]
+	h := newPhone(t, phone, func(cx *Scope) Node {
+		top = NewSignal(cx, false)
+		return Stack{Style: Style{FlexGrow: 1}, Children: []Node{
+			Screen{TestID: "home", Children: []Node{
+				Text{TestID: "text", Content: "kept"},
+				List{TestID: "list", Count: func() int { return 50 }, EstimatedSize: 40, Style: Style{FlexGrow: 1},
+					Row: func(cx *Scope, r ListRow) Node { return View{Style: Style{Height: Pt(40)}} }},
+			}},
+			Show{When: top.Get, Then: func(*Scope) Node { return Screen{TestID: "detail"} }},
+		}}
+	})
+	h.commit()
+	frame, box := h.find("home").frame, h.find("text").text.box
+	rows := len(h.find("list").children)
+	if box.Size.Width == 0 || rows == 0 {
+		t.Fatalf("text box = %v, %d rows while shown", box, rows)
+	}
+	top.Set(true)
+	b := h.commit()
+	home := h.find("home")
+	if home.style.Display != DisplayNone {
+		t.Errorf("covered home's display = %v, want none", home.style.Display)
+	}
+	hidden := false
+	for _, it := range b.Items {
+		if it.Kind == driver.ItemViewStyle && it.ID == home.id {
+			hidden = it.ViewStyle.Hidden
+		}
+	}
+	if !hidden {
+		t.Error("covered home's view was not hidden")
+	}
+	if home.frame != frame || h.find("text").text.box != box || len(h.find("list").children) != rows {
+		t.Errorf("covered home: frame %v (was %v), text box %v (was %v), %d rows (was %d)",
+			home.frame, frame, h.find("text").text.box, box, len(h.find("list").children), rows)
 	}
 }
