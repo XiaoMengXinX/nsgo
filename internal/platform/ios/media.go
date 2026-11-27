@@ -67,6 +67,25 @@ func (s *surface) startTicking() {
 	s.link.Send(sel("setPaused:"), false)
 }
 
+// fullRateLink starts a display link calling action on target that asks
+// for the screen's full rate, retained, for motion the app's own frame
+// clock does not run: a ProMotion iPhone otherwise shows Core Animation's
+// animations and moves made from touches at 60 Hz. Stop it with
+// stopLink.
+func (s *surface) fullRateLink(target objc.ID, action objc.SEL) objc.ID {
+	link := objc.ID(apple.Class("CADisplayLink")).Send(sel("displayLinkWithTarget:selector:"), target, action)
+	rate := float32(max(s.screenRate(), 60))
+	link.Send(sel("setPreferredFrameRateRange:"), apple.CAFrameRateRange{Minimum: min(80, rate), Maximum: rate, Preferred: rate})
+	link.Send(sel("addToRunLoop:forMode:"), objc.ID(apple.Class("NSRunLoop")).Send(sel("mainRunLoop")), apple.CommonModes())
+	return link.Send(sel("retain"))
+}
+
+// stopLink stops and releases a link fullRateLink started.
+func stopLink(link objc.ID) {
+	link.Send(sel("invalidate"))
+	link.Send(selRelease)
+}
+
 func (s *surface) screenRate() int {
 	screen := s.window.Send(sel("screen"))
 	if screen == 0 {

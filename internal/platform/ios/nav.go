@@ -84,6 +84,7 @@ var (
 	sheets                                       = map[objc.ID]*view{}
 	titleWraps                                   = map[objc.ID]*titleWrapState{}
 	selEdgeSwipe                                 = sel("nsgoEdgeSwipe:")
+	selKeepRate                                  = sel("nsgoKeepRate:")
 	selHeaderItem                                = sel("nsgoHeaderItem:")
 )
 
@@ -215,6 +216,8 @@ func registerNav() {
 func navMethods() []objc.MethodDef {
 	return []objc.MethodDef{
 		{Cmd: selEdgeSwipe, Fn: edgeSwiped},
+		// A slide's display link only keeps the screen's rate up.
+		{Cmd: selKeepRate, Fn: func(objc.ID, objc.SEL, objc.ID) {}},
 		{Cmd: selHeaderItem, Fn: headerItemPressed},
 		{Cmd: sel("safeAreaInsetsDidChange"), Fn: func(self objc.ID, cmd objc.SEL) {
 			apple.Super(self, cmd)
@@ -793,6 +796,8 @@ type slide struct {
 	// fade crossfades the top screen in or out instead of moving it
 	// (ScreenFade).
 	fade bool
+	// link holds the screen at its full rate while the slide lasts.
+	link objc.ID
 }
 
 // stackChange is a stack whose screens a batch changes: the screen it
@@ -1017,6 +1022,7 @@ func (s *surface) slideWidth(sl *slide) float64 {
 // startSlide puts the dimming view under the top screen of sl.
 func (s *surface) startSlide(sl *slide) {
 	s.slides[sl.stack] = sl
+	sl.link = s.fullRateLink(sl.stack.native, selKeepRate)
 	sl.dim = objc.ID(apple.Class("UIView")).Send(selNew)
 	sl.dim.Send(sel("setBackgroundColor:"), objc.ID(apple.Class("UIColor")).Send(sel("blackColor")))
 	sl.dim.Send(sel("setUserInteractionEnabled:"), false)
@@ -1091,6 +1097,7 @@ func (s *surface) endSlide(sl *slide) {
 		return
 	}
 	sl.ended = true
+	stopLink(sl.link)
 	if s.slides[sl.stack] == sl {
 		delete(s.slides, sl.stack)
 	}
